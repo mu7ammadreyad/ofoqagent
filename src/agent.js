@@ -19,7 +19,7 @@ if (!CONV_ID)        { console.error('CONV_ID not set');        process.exit(1);
 // GEMINI — Thinking Pass (no tools → no thought_signature error)
 // ================================================================
 async function runThinkingPass(userMsg, systemInstruction, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
 
   const body = {
     contents: [{ role: 'user', parts: [{ text: `فكّر بإيجاز عن: ${userMsg.slice(0, 300)}` }] }],
@@ -62,7 +62,7 @@ async function runThinkingPass(userMsg, systemInstruction, onChunk) {
 // ← stripThoughts() fixes thought_signature error
 // ================================================================
 async function callGeminiFC(messages, systemInstruction) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_API_KEY}`;
 
   // ← CRITICAL: strip thought parts before sending history
   const cleanMessages = stripThoughts(messages);
@@ -137,7 +137,7 @@ async function callGeminiFC(messages, systemInstruction) {
 // ================================================================
 async function callGemmaFallback(messages, systemInstruction) {
   const apiKey = process.env.GEMMA_API_KEY || GEMINI_API_KEY;
-  const url    = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
+  const url    = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key=${apiKey}`;
   const simple = messages
     .filter(m => !m.parts?.some(p => p.functionCall || p.functionResponse))
     .map(m => ({ role: m.role, parts: m.parts.filter(p => p.text && !p.thought) }))
