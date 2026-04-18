@@ -1,0 +1,41 @@
+name: OFOQ Agent — Chat
+
+# Triggered by frontend via GitHub API repository_dispatch
+on:
+  repository_dispatch:
+    types: [agent-chat]
+
+# ── env.client_payload fields: ─────────────────────────────
+#   uid:     Firebase UID of the user
+#   conv_id: Firestore conversation document ID
+
+jobs:
+  run-agent:
+    name: Run Agent Loop
+    runs-on: ubuntu-latest
+    timeout-minutes: 10      # max 10 min per conversation
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run OFOQ Agent
+        env:
+          # ── AI ──────────────────────────────────────────────
+          GEMINI_API_KEY:           ${{ secrets.GEMINI_API_KEY }}
+          GEMMA_API_KEY:            ${{ secrets.GEMMA_API_KEY }}
+          # ── Firebase Admin ──────────────────────────────────
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # ── Conversation context (from frontend dispatch) ───
+          CONV_UID:                 ${{ github.event.client_payload.uid }}
+          CONV_ID:                  ${{ github.event.client_payload.conv_id }}
+        run: node src/agent.js
