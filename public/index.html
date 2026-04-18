@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="ar" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>أفق | OFOQ Agent</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+<script src="https://unpkg.com/@phosphor-icons/web@2.1.1/src/index.js"></script>
+<style>
+/* ════════════════════════════════════════════════════
+   DESIGN TOKENS
+════════════════════════════════════════════════════ */
+:root {
+  --bg:          #f8f8f8;
+  --surface:     #ffffff;
+  --border:      #e4e4e4;
+  --text:        #111111;
+  --text-sub:    #666666;
+  --text-inv:    #ffffff;
+  --accent:      #8b5cf6;
+  --accent-dim:  #ede9fe;
+  --error:       #ef4444;
+  --ok:          #10b981;
+  --font-body:   'IBM Plex Sans Arabic', sans-serif;
+  --font-mono:   'IBM Plex Mono', monospace;
+  --r-sm:        10px;
+  --r-md:        16px;
+  --r-lg:        24px;
+  --sidebar-w:   256px;
+  --shadow:      0 4px 24px rgba(0,0,0,0.06);
+}
+[data-theme="dark"] {
+  --bg:       #0f0f0f;
+  --surface:  #1a1a1a;
+  --border:   #2a2a2a;
+  --text:     #f0f0f0;
+  --text-sub: #888888;
+  --accent-dim: #2e1a5a;
+}
+[data-theme="dark"] .msg-user .bubble { background:#252525!important; color:#ebebeb!important; }
+
+/* ════ RESET ════ */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:var(--font-body);background:var(--bg);color:var(--text);height:100vh;height:100dvh;overflow:hidden;display:flex;font-size:16px;line-height:1.6;}
+
+/* ════════════════════════════════════════════════════
+   RTL — direction on text only, layout stays LTR
+════════════════════════════════════════════════════ */
+body,.bubble,.input-area textarea,.think-text,.agent-update,
+.history-item,.new-chat-btn,.setting-label,.chip{direction:rtl;unicode-bidi:embed;}
+.app,.sidebar,.chat-pane,.header-row,.input-wrapper,
+.message,.think-bubble,.hero,.chips{direction:ltr;}
+
+/* ════════════════════════════════════════════════════
+   LOGIN SCREEN
+════════════════════════════════════════════════════ */
+#loginScreen{
+  position:fixed;inset:0;background:var(--bg);z-index:9999;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:18px;padding:24px;
+}
+.login-box{width:100%;max-width:360px;display:flex;flex-direction:column;gap:10px;}
+.login-input{
+  width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:var(--r-md);
+  font-size:15px;background:var(--surface);color:var(--text);outline:none;
+  font-family:var(--font-body);transition:border-color .2s;
+}
+.login-input:focus{border-color:var(--accent);}
+.btn-primary{
+  width:100%;padding:13px;background:var(--text);color:var(--text-inv);border:none;
+  border-radius:var(--r-md);font-size:15px;font-weight:600;cursor:pointer;
+  font-family:var(--font-body);transition:opacity .2s;
+}
+.btn-primary:hover{opacity:.85;}
+.btn-google{
+  width:100%;padding:13px;background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:var(--r-md);font-size:15px;font-weight:500;
+  cursor:pointer;font-family:var(--font-body);display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:background .2s;
+}
+.btn-google:hover{background:var(--bg);}
+.divider{display:flex;align-items:center;gap:12px;color:var(--text-sub);font-size:13px;}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--border);}
+
+/* ════════════════════════════════════════════════════
+   APP LAYOUT
+════════════════════════════════════════════════════ */
+.app{flex:1;display:flex;height:100%;width:100%;}
+
+/* ════ SIDEBAR ════ */
+.sidebar{
+  width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;padding:16px;flex-shrink:0;
+  transition:transform .3s cubic-bezier(.16,1,.3,1),opacity .3s;z-index:50;
+}
+.sidebar.hidden{transform:translateX(-100%);width:0;padding:0;opacity:0;}
+@media(max-width:768px){
+  .sidebar{position:fixed;top:0;left:0;height:100%;transform:translateX(-100%);}
+  .sidebar.open{transform:translateX(0);opacity:1;width:var(--sidebar-w);padding:16px;}
+}
+.new-chat-btn{
+  display:flex;align-items:center;gap:8px;background:transparent;
+  border:1px solid var(--border);padding:10px 14px;border-radius:var(--r-sm);
+  cursor:pointer;font-family:var(--font-body);font-size:14px;color:var(--text);
+  transition:background .2s;width:100%;justify-content:center;margin-bottom:12px;
+}
+.new-chat-btn:hover{background:var(--bg);}
+.sidebar-label{font-size:11px;color:var(--text-sub);text-transform:uppercase;letter-spacing:.8px;margin:10px 0 6px;}
+.history-item{
+  padding:8px 10px;font-size:13px;color:var(--text);border-radius:8px;
+  cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  transition:background .15s;
+}
+.history-item:hover{background:var(--bg);}
+.sidebar-footer{margin-top:auto;padding-top:12px;border-top:1px solid var(--border);}
+.user-email{font-size:12px;color:var(--text-sub);margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.btn-logout{
+  display:flex;align-items:center;gap:6px;background:none;border:1px solid var(--error);
+  color:var(--error);padding:7px 12px;border-radius:var(--r-sm);cursor:pointer;
+  font-size:13px;font-family:var(--font-body);width:100%;justify-content:center;
+}
+
+/* ════ CHAT PANE ════ */
+.chat-pane{flex:1;display:flex;flex-direction:column;position:relative;overflow:hidden;}
+
+/* ── HEADER ROW ── */
+.header-row{
+  position:absolute;top:0;left:0;right:0;z-index:20;
+  display:flex;justify-content:space-between;align-items:center;
+  padding:14px 16px;pointer-events:none;
+}
+.header-group{display:flex;gap:6px;pointer-events:auto;}
+.icon-btn{
+  background:var(--surface);border:1px solid var(--border);cursor:pointer;
+  padding:7px;border-radius:var(--r-sm);color:var(--text-sub);display:flex;
+  align-items:center;box-shadow:0 1px 4px rgba(0,0,0,.04);transition:all .2s;
+}
+.icon-btn:hover{color:var(--text);border-color:var(--text-sub);}
+
+/* ── SCROLL AREA ── */
+.chat-scroll{
+  flex:1;overflow-y:auto;padding:70px 16px 0;
+  display:flex;flex-direction:column;align-items:center;scroll-behavior:smooth;
+}
+.msg-list{width:100%;max-width:720px;display:flex;flex-direction:column;gap:20px;padding-bottom:200px;}
+
+/* ── MESSAGES ── */
+.message{display:flex;gap:12px;animation:fadeUp .35s ease;}
+.message.msg-user{justify-content:flex-end;}
+.msg-user .bubble{
+  background:#f0f0f0;color:#111;
+  border-radius:18px 18px 4px 18px;padding:11px 18px;max-width:82%;word-wrap:break-word;line-height:1.65;
+}
+.msg-ai .avatar{width:28px;height:28px;flex-shrink:0;display:flex;align-items:center;margin-top:2px;}
+.msg-ai .bubble{padding-top:2px;color:var(--text);flex:1;line-height:1.7;overflow-x:hidden;}
+
+/* ── THINKING BUBBLE ── */
+.think-bubble{display:flex;gap:10px;margin-bottom:-6px;animation:fadeUp .3s ease;}
+.think-av{width:28px;height:28px;flex-shrink:0;opacity:.3;display:flex;align-items:center;}
+.think-content{
+  padding:9px 13px;border-radius:4px 13px 13px 13px;
+  background:var(--bg);border:1px dashed var(--border);
+  font-family:var(--font-mono);font-size:11.5px;color:var(--text-sub);
+  line-height:1.6;max-width:calc(100% - 40px);word-break:break-word;direction:rtl;
+}
+.think-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-sub);opacity:.55;margin-bottom:5px;display:flex;align-items:center;gap:3px;}
+.think-dots{display:inline-flex;gap:4px;align-items:center;height:13px;}
+.think-dots span{width:4px;height:4px;border-radius:50%;background:var(--text-sub);opacity:.3;animation:blink 1.2s infinite;}
+.think-dots span:nth-child(2){animation-delay:.2s;}
+.think-dots span:nth-child(3){animation-delay:.4s;}
+@keyframes blink{0%,80%,100%{opacity:.2;transform:scale(.8)}40%{opacity:.9;transform:scale(1)}}
+.think-text{display:none;white-space:pre-wrap;}
+.think-content.filled .think-dots{display:none;}
+.think-content.filled .think-text{display:block;}
+
+/* ── UPDATE PILL ── */
+.agent-update{
+  display:flex;align-items:center;gap:7px;padding:5px 13px;border-radius:20px;
+  background:var(--surface);border:1px solid var(--border);font-size:12px;
+  color:var(--text-sub);font-family:var(--font-mono);animation:fadeUp .25s ease;width:fit-content;margin:3px 0;
+}
+.upd-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:blink .9s infinite;flex-shrink:0;}
+
+/* ── HERO ── */
+.hero{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);
+  text-align:center;width:100%;max-width:580px;padding:20px;transition:opacity .3s;
+}
+.hero.gone{display:none;}
+.hero-title{font-size:26px;font-weight:500;margin:14px 0 6px;direction:rtl;}
+.hero-sub{font-size:14px;color:var(--text-sub);margin-bottom:24px;direction:rtl;}
+.chips{display:flex;justify-content:center;gap:8px;flex-wrap:wrap;max-width:540px;margin:0 auto;}
+.chip{
+  background:var(--surface);border:1px solid var(--border);padding:7px 14px;
+  border-radius:20px;font-size:13px;color:var(--text-sub);cursor:pointer;
+  transition:all .2s;display:inline-flex;align-items:center;gap:5px;direction:rtl;
+}
+.chip:hover{border-color:var(--text);color:var(--text);transform:translateY(-1px);}
+.chip.active{border-color:var(--accent)!important;color:var(--accent)!important;background:var(--accent-dim)!important;}
+
+/* ── INPUT ── */
+.input-wrapper{
+  position:absolute;bottom:0;left:0;right:0;
+  display:flex;flex-direction:column;align-items:center;z-index:30;
+  padding:8px 16px 16px;
+  background:linear-gradient(to top,var(--bg) 80%,transparent);
+}
+.input-box{
+  width:100%;max-width:720px;background:var(--surface);border-radius:var(--r-lg);
+  padding:13px 16px;display:flex;flex-direction:column;border:1px solid var(--border);
+  transition:border-color .25s;box-shadow:var(--shadow);
+}
+.input-box:focus-within{border-color:var(--border);}
+.input-box textarea{
+  width:100%;border:none;resize:none;font-family:var(--font-body);
+  font-size:16px;max-height:180px;min-height:22px;color:var(--text);
+  background:transparent;outline:none;
+}
+.input-box textarea::placeholder{color:var(--text-sub);}
+.input-footer{display:flex;justify-content:space-between;align-items:center;margin-top:10px;}
+.attach-btn{color:var(--text-sub);cursor:pointer;padding:7px;border-radius:50%;display:flex;transition:all .2s;}
+.attach-btn:hover{color:var(--text);background:var(--bg);}
+.send-btn{
+  width:34px;height:34px;background:var(--text);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  transition:transform .15s;flex-shrink:0;
+}
+.send-btn:hover{transform:scale(1.06);}
+.input-hint{font-size:11px;color:var(--text-sub);text-align:center;margin-top:7px;opacity:.6;}
+.hidden{display:none!important;}
+
+/* ── STATUS BAR ── */
+.status-bar{position:fixed;top:0;left:0;right:0;height:2px;background:transparent;z-index:100;}
+.status-bar.active{background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:sweep 1.4s infinite;}
+@keyframes sweep{0%{background-position:-100%}100%{background-position:200%}}
+
+/* ── SETTINGS MODAL ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none;justify-content:center;align-items:center;backdrop-filter:blur(4px);}
+.modal-box{background:var(--surface);padding:28px;border-radius:var(--r-lg);width:90%;max-width:380px;color:var(--text);}
+.modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;}
+.modal-title{font-size:17px;font-weight:600;}
+.setting-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--border);}
+.setting-label{font-size:14px;}
+.toggle{position:relative;display:inline-block;width:38px;height:22px;}
+.toggle input{opacity:0;width:0;height:0;}
+.toggle-slider{position:absolute;cursor:pointer;inset:0;background:#ccc;border-radius:22px;transition:.3s;}
+.toggle-slider::before{content:'';position:absolute;height:16px;width:16px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s;}
+.toggle input:checked + .toggle-slider{background:var(--text);}
+.toggle input:checked + .toggle-slider::before{transform:translateX(16px);}
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;}
+.status-item{font-size:12px;color:var(--text-sub);}
+
+/* ── ANIMATIONS ── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── MARKDOWN ── */
+.bubble pre{background:#1a1a2e;border-radius:8px;padding:12px;overflow-x:auto;margin:8px 0;}
+.bubble code{font-family:var(--font-mono);font-size:13px;}
+.bubble p{margin-bottom:8px;}
+.bubble p:last-child{margin-bottom:0;}
+.bubble ul,.bubble ol{padding-right:20px;margin:6px 0;}
+.bubble table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px;}
+.bubble th,.bubble td{border:1px solid var(--border);padding:6px 10px;}
+.bubble blockquote{border-right:3px solid var(--accent);padding-right:12px;color:var(--text-sub);margin:8px 0;}
+</style>
+</head>
+<body>
+
+<div class="status-bar" id="statusBar"></div>
+
+<!-- ════ LOGIN SCREEN ════ -->
+<div id="loginScreen">
+  <!-- NEW LOGO -->
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="72" height="72">
+    <defs>
+      <filter id="mesh-blur" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="26"/>
+      </filter>
+      <mask id="ring-mask">
+        <rect width="500" height="500" fill="black"/>
+        <circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="60"/>
+      </mask>
+      <linearGradient id="fade-top" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#111111" stop-opacity="1"/>
+        <stop offset="35%" stop-color="#111111" stop-opacity="0.9"/>
+        <stop offset="100%" stop-color="#111111" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="fade-bottom" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#111111" stop-opacity="0"/>
+        <stop offset="65%" stop-color="#111111" stop-opacity="0.9"/>
+        <stop offset="100%" stop-color="#111111" stop-opacity="1"/>
+      </linearGradient>
+    </defs>
+    <circle cx="250" cy="250" r="175" fill="none" stroke="#111111" stroke-width="60"/>
+    <g mask="url(#ring-mask)">
+      <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
+      <g filter="url(#mesh-blur)">
+        <circle cx="375" cy="160" r="70" fill="#10b981"/>
+        <circle cx="440" cy="250" r="75" fill="#3b82f6"/>
+        <circle cx="375" cy="340" r="70" fill="#f472b6"/>
+        <circle cx="310" cy="250" r="75" fill="#ef4444"/>
+      </g>
+      <rect x="230" y="45" width="270" height="145" fill="url(#fade-top)"/>
+      <rect x="230" y="310" width="270" height="145" fill="url(#fade-bottom)"/>
+    </g>
+  </svg>
+
+  <div style="font-size:22px;font-weight:500;direction:rtl;">أفق — OFOQ Agent</div>
+  <div style="font-size:13px;color:var(--text-sub);direction:rtl;">سجّل دخولك للمتابعة</div>
+
+  <div class="login-box">
+    <input id="loginEmail" type="email" placeholder="الإيميل" class="login-input" dir="ltr">
+    <input id="loginPass"  type="password" placeholder="كلمة السر" class="login-input" dir="ltr"
+      onkeydown="if(event.key==='Enter') loginWithEmail()">
+    <button class="btn-primary" onclick="loginWithEmail()">دخول / تسجيل جديد</button>
+  </div>
+
+  <div class="divider" style="width:100%;max-width:360px;">أو</div>
+  <button class="btn-google" style="width:100%;max-width:360px;" onclick="loginWithGoogle()">
+    <svg width="18" height="18" viewBox="0 0 24 24">
+      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+      <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+    </svg>
+    متابعة بـ Google
+  </button>
+</div>
+
+<!-- ════ SETTINGS MODAL ════ -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title">الإعدادات</div>
+      <button onclick="toggleSettings(false)" class="icon-btn"><i class="ph ph-x"></i></button>
+    </div>
+    <div class="setting-row">
+      <span class="setting-label">الوضع الليلي</span>
+      <label class="toggle">
+        <input type="checkbox" id="darkToggle" onchange="toggleDark()">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="setting-row" style="border:none;flex-direction:column;align-items:flex-start;gap:10px;">
+      <span class="setting-label">حالة النظام</span>
+      <div class="status-grid" id="statusGrid">
+        <div class="status-item">جارٍ التحقق...</div>
+      </div>
+    </div>
+    <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+      <div id="userEmailDisplay" style="font-size:12px;color:var(--text-sub);overflow:hidden;text-overflow:ellipsis;max-width:200px;"></div>
+      <button onclick="logout();toggleSettings(false);" class="btn-logout"><i class="ph ph-sign-out"></i> خروج</button>
+    </div>
+  </div>
+</div>
+
+<!-- ════ APP ════ -->
+<div class="app" id="appRoot" style="display:none;">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <button class="new-chat-btn" onclick="resetChat()"><i class="ph ph-plus-circle"></i> محادثة جديدة</button>
+    <div class="sidebar-label">المحادثات الأخيرة</div>
+    <div id="historyList"></div>
+    <div class="sidebar-footer">
+      <div id="userEmailSidebar" class="user-email"></div>
+      <button onclick="logout()" class="btn-logout"><i class="ph ph-sign-out"></i> تسجيل خروج</button>
+    </div>
+  </aside>
+
+  <!-- CHAT PANE -->
+  <div class="chat-pane">
+    <div class="header-row">
+      <div class="header-group">
+        <button class="icon-btn" onclick="toggleSettings(true)"><i class="ph ph-user-circle" style="font-size:20px"></i></button>
+      </div>
+      <div class="header-group">
+        <button class="icon-btn" onclick="resetChat()"><i class="ph ph-note-pencil" style="font-size:20px"></i></button>
+        <button class="icon-btn" onclick="toggleSidebar()"><i class="ph ph-sidebar-simple" style="font-size:20px"></i></button>
+      </div>
+    </div>
+
+    <!-- HERO STATE -->
+    <div class="hero" id="hero">
+      <!-- NEW LOGO -->
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="72" height="72" style="margin-bottom:12px">
+        <defs>
+          <filter id="mb2" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="26"/></filter>
+          <mask id="rm2"><rect width="500" height="500" fill="black"/><circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="60"/></mask>
+          <linearGradient id="ft2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#111" stop-opacity="1"/><stop offset="35%" stop-color="#111" stop-opacity=".9"/>
+            <stop offset="100%" stop-color="#111" stop-opacity="0"/>
+          </linearGradient>
+          <linearGradient id="fb2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#111" stop-opacity="0"/><stop offset="65%" stop-color="#111" stop-opacity=".9"/>
+            <stop offset="100%" stop-color="#111" stop-opacity="1"/>
+          </linearGradient>
+        </defs>
+        <circle cx="250" cy="250" r="175" fill="none" stroke="#111" stroke-width="60"/>
+        <g mask="url(#rm2)">
+          <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
+          <g filter="url(#mb2)">
+            <circle cx="375" cy="160" r="70" fill="#10b981"/>
+            <circle cx="440" cy="250" r="75" fill="#3b82f6"/>
+            <circle cx="375" cy="340" r="70" fill="#f472b6"/>
+            <circle cx="310" cy="250" r="75" fill="#ef4444"/>
+          </g>
+          <rect x="230" y="45" width="270" height="145" fill="url(#ft2)"/>
+          <rect x="230" y="310" width="270" height="145" fill="url(#fb2)"/>
+        </g>
+      </svg>
+      <h1 class="hero-title">أفق — OFOQ Agent</h1>
+      <p class="hero-sub">نشر المحتوى الإسلامي تلقائياً · GitHub Actions · Firebase</p>
+      <div class="chips" id="heroChips">
+        <div class="chip" data-step="1" onclick="runScenario(1)"><i class="ph ph-github-logo"></i> ربط GitHub</div>
+        <div class="chip" data-step="2" onclick="runScenario(2)"><i class="ph ph-youtube-logo"></i> إضافة YouTube</div>
+        <div class="chip" data-step="3" onclick="runScenario(3)"><i class="ph ph-rocket-launch"></i> ابدأ النشر</div>
+        <div class="chip" onclick="fillInput('ما هي حالة النظام؟')"><i class="ph ph-gauge"></i> حالة النظام</div>
+        <div class="chip" onclick="fillInput('اعرض الفيديوهات المعلقة')"><i class="ph ph-video"></i> الفيديوهات</div>
+        <div class="chip" onclick="fillInput('افحص صحة التوكنز')"><i class="ph ph-shield-check"></i> فحص الصحة</div>
+      </div>
+    </div>
+
+    <!-- CHAT SCROLL -->
+    <div class="chat-scroll" id="chatScroll">
+      <div class="msg-list" id="messages"></div>
+    </div>
+
+    <!-- INPUT -->
+    <div class="input-wrapper">
+      <div id="filePreview" style="display:none;width:100%;max-width:720px;margin-bottom:8px;background:var(--surface);padding:7px 12px;border-radius:8px;align-items:center;gap:8px;border:1px solid var(--border);">
+        <span id="previewName" style="font-size:13px;">ملف</span>
+        <button onclick="clearFile()" style="margin-right:auto;background:none;border:none;cursor:pointer;color:var(--text-sub);">&times;</button>
+      </div>
+      <input type="file" id="fileInput" hidden onchange="handleFileSelect(this)">
+      <div class="input-box">
+        <textarea id="userInput" rows="1" placeholder="اكتب رسالتك..."
+          oninput="autoResize(this)" onkeydown="handleEnter(event)"></textarea>
+        <div class="input-footer">
+          <div class="attach-btn" onclick="document.getElementById('fileInput').click()"><i class="ph ph-paperclip" style="font-size:20px"></i></div>
+          <div class="send-btn" id="sendBtn" onclick="handleSend()">
+            <i id="sendIcon" class="ph ph-arrow-up" style="font-size:17px;color:var(--text-inv)"></i>
+            <i id="stopIcon" class="ph ph-stop-circle hidden" style="font-size:17px;color:var(--text-inv)"></i>
+          </div>
+        </div>
+      </div>
+      <div class="input-hint">OFOQ Agent v5 · GitHub Actions · Firebase</div>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase SDKs (compat) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+<!-- Markdown + Highlight -->
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+
+<script>
+// ================================================================
+// ← استبدل هذه القيم بمشروعك من Firebase Console → Project Settings
+// ================================================================
+const FIREBASE_CONFIG = {
+  apiKey:            "YOUR_WEB_API_KEY",
+  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId:         "YOUR_PROJECT_ID",
+  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId:             "YOUR_APP_ID",
+};
+
+// ← GitHub repo للـ Agent (صاحب الكود — مش repo الفيديوهات)
+const GITHUB_OWNER       = "YOUR_GITHUB_USERNAME";
+const GITHUB_AGENT_REPO  = "ofoq-agent";
+
+// ================================================================
+// FIREBASE INIT
+// ================================================================
+firebase.initializeApp(FIREBASE_CONFIG);
+const fbAuth = firebase.auth();
+const db     = firebase.firestore();
+
+let currentUser    = null;
+let currentIdToken = null;
+let convListener   = null; // Firestore onSnapshot unsubscribe
+
+// ── Auth state ──────────────────────────────────────────────────
+fbAuth.onAuthStateChanged(async user => {
+  currentUser = user;
+  if (user) {
+    currentIdToken = await user.getIdToken();
+    setInterval(async () => { currentIdToken = await user.getIdToken(true); }, 50 * 60 * 1000);
+    showApp();
+  } else {
+    showLoginScreen();
+  }
+});
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appRoot').style.display     = 'flex';
+  const email = currentUser.email || currentUser.displayName || 'مستخدم';
+  document.getElementById('userEmailDisplay').textContent = email;
+  document.getElementById('userEmailSidebar').textContent = email;
+  loadTheme();
+  fetchStatus();
+}
+function showLoginScreen() {
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('appRoot').style.display     = 'none';
+}
+
+// ── Auth actions ────────────────────────────────────────────────
+async function loginWithEmail() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass  = document.getElementById('loginPass').value;
+  if (!email || !pass) return alert('أدخل الإيميل وكلمة السر');
+  try {
+    await fbAuth.signInWithEmailAndPassword(email, pass);
+  } catch (e) {
+    if (e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential') {
+      try { await fbAuth.createUserWithEmailAndPassword(email, pass); }
+      catch (e2) { alert('خطأ: ' + e2.message); }
+    } else { alert('خطأ: ' + e.message); }
+  }
+}
+async function loginWithGoogle() {
+  try { await fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider()); }
+  catch (e) { alert('فشل تسجيل الدخول: ' + e.message); }
+}
+function logout() {
+  if (convListener) { convListener(); convListener = null; }
+  fbAuth.signOut();
+  chatHistory = []; sessions = [];
+}
+
+// ================================================================
+// STATUS
+// ================================================================
+async function fetchStatus() {
+  if (!currentUser) return;
+  try {
+    const doc = await db.doc(`users/${currentUser.uid}/plan/current`).get();
+    const config = await db.doc(`users/${currentUser.uid}/config/main`).get();
+    const p = doc.exists ? doc.data() : {};
+    const c = config.exists ? config.data() : {};
+    document.getElementById('statusGrid').innerHTML = `
+      <div class="status-item">● GitHub: ${c.github?.status||'?'}</div>
+      <div class="status-item">● YouTube: ${c.youtube?.status||'?'}</div>
+      <div class="status-item">● خطة: ${p.status||'idle'}</div>
+      <div class="status-item">● منشور: ${p.published_count||0}/${p.slots?.length||0}</div>
+    `;
+  } catch {}
+}
+
+// ================================================================
+// THEME
+// ================================================================
+function loadTheme() {
+  const t = localStorage.getItem('theme') || 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  document.getElementById('darkToggle').checked = t === 'dark';
+}
+function toggleDark() {
+  const d = document.getElementById('darkToggle').checked;
+  document.documentElement.setAttribute('data-theme', d ? 'dark' : 'light');
+  localStorage.setItem('theme', d ? 'dark' : 'light');
+}
+
+// ================================================================
+// UI HELPERS
+// ================================================================
+function toggleSettings(show) { document.getElementById('settingsModal').style.display = show ? 'flex' : 'none'; if (show) fetchStatus(); }
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  window.innerWidth <= 768 ? sb.classList.toggle('open') : sb.classList.toggle('hidden');
+}
+function autoResize(ta) { ta.style.height='auto'; ta.style.height=Math.min(ta.scrollHeight,180)+'px'; }
+function handleEnter(e) { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();} }
+function fillInput(t) { const el=document.getElementById('userInput'); el.value=t; autoResize(el); el.focus(); }
+function scrollBottom() { const c=document.getElementById('chatScroll'); c.scrollTop=c.scrollHeight; }
+
+// ── Scenarios ──────────────────────────────────────────────────
+const SCENARIOS = {
+  1: { msg: 'مرحباً أفق!\ntoken: ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nrepo_owner: myusername\nrepo_name: ofoq-videos' },
+  2: { msg: 'هأضيف YouTube:\nclient_id: 123456789.apps.googleusercontent.com\nclient_secret: GOCSPX-xxxxxxxx\nrefresh_token: 1//0gXXXXXXXXXXXXXXXX' },
+  3: { msg: 'كل شيء جاهز! ابدأ خطة النشر اليومية.' },
+};
+function runScenario(s) {
+  const sc=SCENARIOS[s]; if(!sc) return;
+  const el=document.getElementById('userInput'); el.value=sc.msg; autoResize(el); el.focus();
+  document.querySelectorAll('.chip[data-step]').forEach(c=>c.classList.remove('active'));
+  document.querySelector(`.chip[data-step="${s}"]`)?.classList.add('active');
+}
+
+// ── File ───────────────────────────────────────────────────────
+let currentFile = null;
+function handleFileSelect(input) {
+  const f = input.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = e => {
+    currentFile = { name: f.name, content: e.target.result };
+    const pr = document.getElementById('filePreview');
+    pr.style.display = 'flex';
+    document.getElementById('previewName').textContent = f.name;
+  };
+  r.readAsDataURL(f);
+}
+function clearFile() { currentFile=null; document.getElementById('fileInput').value=''; document.getElementById('filePreview').style.display='none'; }
+
+// ================================================================
+// STATE
+// ================================================================
+let chatHistory   = [];
+let sessions      = [];
+let currentSession = Date.now();
+let isGenerating  = false;
+
+// ================================================================
+// SEND MESSAGE
+// ================================================================
+function handleSend() {
+  if (isGenerating) { stopGen(); return; }
+  const text = document.getElementById('userInput').value.trim();
+  if (!text && !currentFile) return;
+  sendMessage(text, currentFile);
+}
+function stopGen() {
+  if (convListener) { convListener(); convListener = null; }
+  isGenerating = false; setBusy(false); removeUpdateEl();
+}
+function setBusy(b) {
+  document.getElementById('sendIcon').classList.toggle('hidden', b);
+  document.getElementById('stopIcon').classList.toggle('hidden', !b);
+  document.getElementById('statusBar').className = b ? 'status-bar active' : 'status-bar';
+}
+
+async function sendMessage(text, fileData) {
+  if (!currentUser || !currentIdToken) {
+    renderMsg('ai', '🔐 سجّل دخولك أولاً.'); return;
+  }
+
+  document.getElementById('hero').classList.add('gone');
+  const payload = fileData?.content ? `[File: ${fileData.name}]\n${atob(fileData.content.split(',')[1])}\n\n${text}` : text;
+
+  renderMsg('user', text);
+  chatHistory.push({ role: 'user', content: text });
+  document.getElementById('userInput').value = ''; autoResize(document.getElementById('userInput'));
+  clearFile(); isGenerating = true; setBusy(true);
+
+  // 1. Create Firestore conversation document
+  const convId = `conv_${Date.now()}`;
+  await db.doc(`users/${currentUser.uid}/conversations/${convId}`).set({
+    status:          'pending',
+    created_at:      firebase.firestore.Timestamp.now(),
+    user_message:    payload,
+    history:         chatHistory.slice(0, -1), // exclude last user msg (it's in user_message)
+    thinking_chunks: [],
+    tool_updates:    [],
+    final_response:  null,
+    error:           null,
+  });
+
+  // 2. Create thinking bubble immediately
+  const thinkEl = createThinkBubble();
+
+  // 3. Listen to Firestore for real-time updates
+  let thinkBuffer = '';
+  convListener = db.doc(`users/${currentUser.uid}/conversations/${convId}`)
+    .onSnapshot(snap => {
+      if (!snap.exists) return;
+      const data = snap.data();
+
+      // Append new thinking chunks
+      const chunks = data.thinking_chunks || [];
+      const combined = chunks.join('');
+      if (combined && combined !== thinkBuffer) {
+        const diff = combined.slice(thinkBuffer.length);
+        thinkBuffer = combined;
+        appendThinkChunk(thinkEl, diff);
+      }
+
+      // Show tool updates
+      const updates = data.tool_updates || [];
+      if (updates.length) showUpdatePill(updates[updates.length - 1]);
+
+      // Done!
+      if (data.status === 'done' && data.final_response) {
+        convListener(); convListener = null;
+        removeUpdateEl();
+        // Clean up empty thinking bubble
+        const tc = thinkEl?.querySelector('.think-content');
+        if (tc && !tc.classList.contains('filled')) { thinkEl.remove(); }
+        renderMsg('ai', data.final_response);
+        chatHistory.push({ role: 'assistant', content: data.final_response });
+        saveSession(text);
+        isGenerating = false; setBusy(false);
+      }
+
+      // Error
+      if (data.status === 'error') {
+        convListener(); convListener = null;
+        removeUpdateEl();
+        if (thinkEl) thinkEl.remove();
+        renderMsg('ai', `❌ حدث خطأ: ${data.error || 'خطأ غير معروف'}`);
+        isGenerating = false; setBusy(false);
+      }
+    });
+
+  // 4. Dispatch GitHub Action
+  await dispatchGitHubAction(currentUser.uid, convId);
+}
+
+// ================================================================
+// DISPATCH GITHUB ACTION
+// ================================================================
+async function dispatchGitHubAction(uid, convId) {
+  // الـ GitHub dispatch token مخزّن في Firestore settings (يضيفه المستخدم مرة واحدة)
+  let dispatchToken = '';
+  try {
+    const cfg = await db.doc(`users/${uid}/config/main`).get();
+    dispatchToken = cfg.data()?.settings?.github_dispatch_token || cfg.data()?.github?.token || '';
+  } catch {}
+
+  if (!dispatchToken) {
+    await db.doc(`users/${uid}/conversations/${convId}`).update({
+      status: 'error',
+      error:  'github_dispatch_token غير موجود — أضفه في الإعدادات (Settings → update_settings)',
+    });
+    return;
+  }
+
+  const resp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_AGENT_REPO}/dispatches`, {
+    method:  'POST',
+    headers: {
+      Authorization:  `token ${dispatchToken}`,
+      Accept:         'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+      'User-Agent':   'OFOQ-Frontend/5.0',
+    },
+    body: JSON.stringify({
+      event_type:     'agent-chat',
+      client_payload: { uid, conv_id: convId },
+    }),
+  });
+
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    await db.doc(`users/${uid}/conversations/${convId}`).update({
+      status: 'error',
+      error:  `فشل dispatch GitHub Action: ${resp.status} — ${body.message || ''}`,
+    });
+  }
+}
+
+// ================================================================
+// RENDER HELPERS
+// ================================================================
+function renderMsg(role, text) {
+  const c   = document.getElementById('messages');
+  const div = document.createElement('div');
+  div.className = `message msg-${role}`;
+  const avatarHtml = role === 'ai' ? `<div class="avatar">
+    <svg viewBox="0 0 500 500" width="26" height="26" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="mb3" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="26"/></filter>
+        <mask id="rm3"><rect width="500" height="500" fill="black"/><circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="60"/></mask>
+        <linearGradient id="ft3" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#111" stop-opacity="1"/><stop offset="100%" stop-color="#111" stop-opacity="0"/>
+        </linearGradient>
+        <linearGradient id="fb3" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#111" stop-opacity="0"/><stop offset="100%" stop-color="#111" stop-opacity="1"/>
+        </linearGradient>
+      </defs>
+      <circle cx="250" cy="250" r="175" fill="none" stroke="currentColor" stroke-width="60"/>
+      <g mask="url(#rm3)">
+        <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
+        <g filter="url(#mb3)"><circle cx="375" cy="160" r="70" fill="#10b981"/><circle cx="440" cy="250" r="75" fill="#3b82f6"/><circle cx="375" cy="340" r="70" fill="#f472b6"/><circle cx="310" cy="250" r="75" fill="#ef4444"/></g>
+        <rect x="230" y="45" width="270" height="145" fill="url(#ft3)"/>
+        <rect x="230" y="310" width="270" height="145" fill="url(#fb3)"/>
+      </g>
+    </svg>
+  </div>` : '';
+  div.innerHTML = avatarHtml + `<div class="bubble markdown-body">${marked.parse(text||'')}</div>`;
+  c.appendChild(div);
+  hljs.highlightAll();
+  scrollBottom();
+}
+
+function createThinkBubble() {
+  const c = document.getElementById('messages');
+  const d = document.createElement('div');
+  d.className = 'think-bubble';
+  d.innerHTML = `<div class="think-av">
+    <svg viewBox="0 0 500 500" width="20" height="20" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="250" cy="250" r="175" fill="none" stroke="currentColor" stroke-width="60"/>
+    </svg>
+  </div>
+  <div class="think-content">
+    <div class="think-label"><i class="ph ph-brain"></i> يفكر بصوت عالٍ</div>
+    <div class="think-dots"><span></span><span></span><span></span></div>
+    <div class="think-text"></div>
+  </div>`;
+  c.appendChild(d); scrollBottom();
+  return d;
+}
+function appendThinkChunk(el, chunk) {
+  if (!el) return;
+  const tc = el.querySelector('.think-content'), txt = el.querySelector('.think-text');
+  if (!tc || !txt) return;
+  tc.classList.add('filled');
+  txt.textContent += chunk;
+  scrollBottom();
+}
+
+let updateEl = null;
+function showUpdatePill(text) {
+  removeUpdateEl();
+  const c = document.getElementById('messages');
+  const d = document.createElement('div');
+  d.className = 'agent-update'; d.id = 'updPill';
+  d.innerHTML = `<div class="upd-dot"></div>${escHtml(text)}`;
+  c.appendChild(d); scrollBottom();
+  updateEl = d;
+}
+function removeUpdateEl() { document.getElementById('updPill')?.remove(); updateEl = null; }
+
+// ================================================================
+// SESSIONS
+// ================================================================
+function saveSession(firstMsg) {
+  const preview = (firstMsg||'محادثة').slice(0,40);
+  const idx = sessions.findIndex(s=>s.id===currentSession);
+  const obj = { id:currentSession, preview, history:chatHistory.map(m=>({...m})) };
+  if (idx>=0) sessions[idx]=obj; else sessions.unshift(obj);
+  sessions=sessions.slice(0,15);
+  renderSessions();
+}
+function renderSessions() {
+  document.getElementById('historyList').innerHTML = sessions.map(s=>
+    `<div class="history-item" onclick="loadSession(${s.id})">${escHtml(s.preview)}</div>`
+  ).join('');
+}
+function loadSession(id) {
+  const s = sessions.find(x=>x.id===id); if (!s) return;
+  currentSession=id; chatHistory=s.history.map(m=>({...m}));
+  document.getElementById('messages').innerHTML='';
+  document.getElementById('hero').classList.add('gone');
+  for (const m of chatHistory) renderMsg(m.role==='user'?'user':'ai', m.content);
+  if (window.innerWidth<=768) document.getElementById('sidebar').classList.remove('open');
+}
+function resetChat() {
+  if (convListener) { convListener(); convListener=null; }
+  saveSession('');
+  chatHistory=[]; currentSession=Date.now();
+  document.getElementById('messages').innerHTML='';
+  document.getElementById('hero').classList.remove('gone');
+  document.querySelectorAll('.chip[data-step]').forEach(c=>c.classList.remove('active'));
+  if (window.innerWidth<=768) document.getElementById('sidebar').classList.remove('open');
+}
+
+// ================================================================
+// UTILS
+// ================================================================
+function escHtml(t) { return String(t||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m])); }
+window.addEventListener('load', loadTheme);
+</script>
+</body>
+</html>
