@@ -168,12 +168,15 @@ async function runAgentLoop(uid, convId, userMsg, history, systemInstruction) {
   for (let round = 0; round < 6; round++) {
     const { text, funcCall } = await callGeminiFC(messages, systemInstruction);
 
-    // Add model response to history (no thought parts — stripThoughts handles next round)
     const modelParts = [];
-    if (funcCall) modelParts.push({ functionCall: funcCall });
-    if (text)     modelParts.push({ text });
+    if (funcCall) {
+      modelParts.push({ text: "سأقوم بتنفيذ الأمر التالي:" }); 
+      modelParts.push({ functionCall: funcCall });
+    } else if (text) {
+      modelParts.push({ text });
+    }
+    
     if (modelParts.length) messages.push({ role: 'model', parts: modelParts });
-
     if (funcCall) {
       const label = TOOL_LABELS[funcCall.name] || funcCall.name;
       log('info', 'agent', `tool call: ${funcCall.name}`);
