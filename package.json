@@ -1,0 +1,15 @@
+{
+  "name": "ofoq-agent",
+  "version": "5.0.0",
+  "type": "module",
+  "private": true,
+  "description": "OFOQ Publisher Agent — GitHub Actions + Firebase",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "agent": "node src/agent.js",
+    "publish": "node src/daily-publish.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.3.0"
+  }
+}
