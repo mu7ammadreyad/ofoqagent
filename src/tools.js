@@ -52,8 +52,17 @@ export function cairoDate() {
 }
 
 // ================================================================
-// FIREBASE — MEMORY ONLY
+// FIREBASE — MEMORY + MD DOCS
 // ================================================================
+
+// ← Firebase Service Account — مؤقت للتطوير، انقله لـ GitHub Secret لاحقاً
+const FIREBASE_SA_HARDCODED = process.env.FIREBASE_SERVICE_ACCOUNT || JSON.stringify({
+  // ضع هنا محتوى ملف serviceAccount.json مؤقتاً
+  // مثال: "type": "service_account", "project_id": "...", ...
+  // استبدله بـ FIREBASE_SERVICE_ACCOUNT secret في الإنتاج
+  _placeholder: true,
+});
+
 let _db = null;
 
 async function getDb() {
@@ -61,7 +70,13 @@ async function getDb() {
   const { initializeApp, cert, getApps } = await import('firebase-admin/app');
   const { getFirestore } = await import('firebase-admin/firestore');
   if (!getApps().length) {
-    const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    let sa;
+    try {
+      sa = JSON.parse(FIREBASE_SA_HARDCODED);
+    } catch (e) {
+      throw new Error('FIREBASE_SERVICE_ACCOUNT غير صالح — تحقق من الـ JSON');
+    }
+    if (sa._placeholder) throw new Error('ضع Firebase Service Account في FIREBASE_SA_HARDCODED أو GitHub Secret');
     initializeApp({ credential: cert(sa) });
   }
   _db = getFirestore();
@@ -70,29 +85,47 @@ async function getDb() {
 
 // قراءة memory.md من Firestore
 export async function loadMemory(uid) {
-  try {
-    const db  = await getDb();
-    const doc = await db.doc(`users/${uid}/memory/doc`).get();
-    if (doc.exists && doc.data()?.content) return doc.data().content;
-    return readMd('memory.md'); // template للمستخدمين الجدد
-  } catch (e) {
-    log('error', 'memory', 'loadMemory failed', { error: e.message });
-    return readMd('memory.md');
-  }
+  return loadMdDoc(uid, 'memory');
 }
 
 // حفظ memory.md كاملاً في Firestore
 export async function saveMemory(uid, content) {
+  await saveMdDoc(uid, 'memory', content);
+}
+
+// ── قراءة MD document من Firestore per-uid ────────────────────────
+// يُستخدم لـ soul / tools / memory
+// fallback: ملف محلي لو الـ document غير موجود بعد
+export async function loadMdDoc(uid, docName) {
+  try {
+    const db  = await getDb();
+    const doc = await db.doc(`users/${uid}/config/${docName}`).get();
+    if (doc.exists && doc.data()?.content) return doc.data().content;
+    // أول مرة → احفظ الـ template محلياً في Firestore
+    const template = readMd(`${docName}.md`);
+    if (template) {
+      await saveMdDoc(uid, docName, template);
+      log('ok', 'memory', `${docName}.md → Firestore (first time init)`);
+    }
+    return template;
+  } catch (e) {
+    log('error', 'memory', `loadMdDoc(${docName}) failed`, { error: e.message });
+    return readMd(`${docName}.md`);
+  }
+}
+
+// ── حفظ MD document في Firestore per-uid ─────────────────────────
+export async function saveMdDoc(uid, docName, content) {
   try {
     const db = await getDb();
-    await db.doc(`users/${uid}/memory/doc`).set({
+    await db.doc(`users/${uid}/config/${docName}`).set({
       content,
       updated_at: new Date().toISOString(),
     });
-    log('ok', 'memory', `saveMemory uid=${uid.slice(0,8)}`);
+    log('ok', 'memory', `saveMdDoc(${docName}) uid=${uid.slice(0,8)}`);
   } catch (e) {
-    log('error', 'memory', 'saveMemory failed', { error: e.message });
-    throw e; // re-throw حتى agent يعرف
+    log('error', 'memory', `saveMdDoc(${docName}) failed`, { error: e.message });
+    throw e;
   }
 }
 
@@ -190,51 +223,50 @@ export async function executeCode(uid, code, currentMemory, lang = 'js') {
 }
 
 // ── JavaScript Execution ──────────────────────────────────────────
+// FIX: استخدم .cjs (CommonJS) بدل .mjs (ES Module)
+// في CommonJS، كل الكود يُلفّ تلقائياً في function بواسطة Node.js
+// لذا return statement قانوني على أي مستوى
 async function executeJS(uid, id, code, currentMemory) {
-  const tmpFile = join(tmpdir(), `${id}.mjs`);
+  const tmpFile = join(tmpdir(), `${id}.cjs`); // ← .cjs بدل .mjs
 
-  // استخرج helper functions من tools.md
   const toolsMd   = readMd('tools.md');
   const helpersFn = extractJsBlocks(toolsMd);
 
   const escapedMem = JSON.stringify(currentMemory);
   const escapedUid = JSON.stringify(uid);
 
-  const wrapper = `
-// OFOQ JS Sandbox — Node.js ${process.version}
-// project: ${PROJECT_DIR}
-
+  // CommonJS wrapper — return صح على أي مستوى
+  const wrapper = `'use strict';
 const __mem = ${escapedMem};
 const __uid = ${escapedUid};
 
-// ── fetch محسّن مع User-Agent تلقائي ─────────────────────────────
-const _originalFetch = globalThis.fetch;
+// ── fetch محسّن مع User-Agent ──────────────────────────────────
+const _origFetch = globalThis.fetch;
 globalThis.fetch = (url, opts = {}) => {
-  const headers = {
-    'User-Agent': 'OFOQ-Agent/6.0',
-    ...(opts.headers || {}),
-  };
-  return _originalFetch(url, { ...opts, headers });
+  return _origFetch(url, {
+    ...opts,
+    headers: { 'User-Agent': 'OFOQ-Agent/6.0', ...(opts.headers || {}) },
+  });
 };
 
-// ── Helper Functions من tools.md ─────────────────────────────────
+// ── Helper Functions من tools.md ──────────────────────────────
 ${helpersFn}
 
-// ── كود الـ AI ────────────────────────────────────────────────────
+// ── كود الـ AI ─────────────────────────────────────────────────
 async function __run__() {
 ${code}
 }
 
-let __result__;
-try {
-  __result__ = await __run__();
-  if (__result__ !== undefined) {
-    process.stdout.write('\\n__RESULT__:' + JSON.stringify(__result__) + '\\n');
-  }
-} catch (e) {
-  process.stdout.write('\\n__ERROR__:' + e.message + '\\n');
-  process.exit(1);
-}
+__run__()
+  .then(r => {
+    if (r !== undefined) {
+      console.log('__RESULT__:' + JSON.stringify(r));
+    }
+  })
+  .catch(e => {
+    console.error('__ERROR__:' + e.message);
+    process.exit(1);
+  });
 `;
 
   writeFileSync(tmpFile, wrapper, 'utf8');
@@ -245,14 +277,14 @@ try {
       timeout:   30_000,
       maxBuffer: 1024 * 512,
       encoding:  'utf8',
-      cwd:       PROJECT_DIR,   // ← FIX 1: node_modules موجودة هنا
+      cwd:       PROJECT_DIR,
       env: {
         ...process.env,
-        NODE_PATH: join(PROJECT_DIR, 'node_modules'), // ← FIX 2: resolver صح
+        NODE_PATH: join(PROJECT_DIR, 'node_modules'),
       },
     });
   } catch (e) {
-    stderr = e.stdout || e.stderr || e.message || '';
+    stderr = (e.stdout || '') + (e.stderr || e.message || '');
     if (e.stdout) stdout = e.stdout;
   } finally {
     try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
