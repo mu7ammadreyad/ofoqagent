@@ -5,6 +5,7 @@
 import {
   log, sleep, readMd,
   loadMemory, saveMemory, patchMemSection, getMemVal,
+  loadMdDoc, saveMdDoc,
   saveConv, updateConv, getConv,
   appendFirestoreArray,
   executeCode,
@@ -75,7 +76,7 @@ async function handleMemUpdate(uid, currentMemory, execResult) {
 // ================================================================
 
 async function streamThinking(userMsg, soul, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
   const body = {
     contents:          [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 300)}` }] }],
     systemInstruction: { parts: [{ text: soul.slice(0, 1000) }] },
@@ -122,7 +123,7 @@ async function streamThinking(userMsg, soul, onChunk) {
 // ================================================================
 
 async function callModel(messages, systemInstruction, useGemma = false) {
-  const model  = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
+  const model  = useGemma ? 'gemma-3-27b-it' : 'gemini-2.5-flash-preview-04-17';
   const apiKey = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url    = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
@@ -132,7 +133,7 @@ async function callModel(messages, systemInstruction, useGemma = false) {
     .filter(m => m.parts.length);
 
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3000_000);
+  const timer = setTimeout(() => ctrl.abort(), 30_000);
 
   let resp;
   try {
@@ -303,11 +304,6 @@ async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
 async function main() {
   log('info', 'agent', `Starting — uid=${UID?.slice(0,8)} conv=${CONV_ID}`);
 
-  const soul    = readMd('soul.md');
-  const toolsMd = readMd('tools.md');
-
-  if (!soul) { log('error','agent','soul.md not found'); process.exit(1); }
-
   await updateConv(UID, CONV_ID, { status: 'running' });
 
   const conv = await getConv(UID, CONV_ID);
@@ -316,7 +312,17 @@ async function main() {
   const userMsg = conv.user_message;
   const history = conv.history || [];
 
-  // Thinking pass (SSE → Firestore)
+  // تحميل MD files من Firestore per-uid
+  // أول مرة: يُنسَخ من الملف المحلي ويُحفَظ في Firestore
+  // المستخدم يستطيع تعديلها لاحقاً عبر الـ AI
+  const [soul, toolsMd] = await Promise.all([
+    loadMdDoc(UID, 'soul'),
+    loadMdDoc(UID, 'tools'),
+  ]);
+
+  if (!soul) { log('error','agent','soul.md not found — check md/ folder'); process.exit(1); }
+
+  // Thinking pass
   await updateConv(UID, CONV_ID, { status: 'thinking' });
   await streamThinking(userMsg, soul, async (chunk) => {
     await appendFirestoreArray(UID, CONV_ID, 'thinking_chunks', chunk);
@@ -328,7 +334,6 @@ async function main() {
     UID, CONV_ID, userMsg, history, soul, toolsMd,
   );
 
-  // Finish
   await saveConv(UID, CONV_ID, {
     status:         'done',
     final_response: finalText,
