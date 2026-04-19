@@ -76,7 +76,7 @@ async function handleMemUpdate(uid, currentMemory, execResult) {
 // ================================================================
 
 async function streamThinking(userMsg, soul, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
   const body = {
     contents:          [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 300)}` }] }],
     systemInstruction: { parts: [{ text: soul.slice(0, 1000) }] },
@@ -123,7 +123,7 @@ async function streamThinking(userMsg, soul, onChunk) {
 // ================================================================
 
 async function callModel(messages, systemInstruction, useGemma = false) {
-  const model  = useGemma ? 'gemma-3-27b-it' : 'gemini-2.5-flash-preview-04-17';
+  const model  = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
   const apiKey = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url    = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
@@ -133,7 +133,7 @@ async function callModel(messages, systemInstruction, useGemma = false) {
     .filter(m => m.parts.length);
 
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30_000);
+  const timer = setTimeout(() => ctrl.abort(), 3000_000);
 
   let resp;
   try {
