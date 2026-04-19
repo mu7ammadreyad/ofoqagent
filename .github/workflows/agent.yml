@@ -8,16 +8,25 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '20', cache: 'npm' }
-      - run: npm ci
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # تم حذف خاصية cache لتجنب الخطأ في حال عدم وجود package-lock.json
+
+      - name: Install Dependencies
+        run: npm install
+
       - name: Run Agent
         env:
-          GEMINI_API_KEY:           ${{ secrets.GEMINI_API_KEY }}
-          GEMMA_API_KEY:            ${{ secrets.GEMMA_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMMA_API_KEY: ${{ secrets.GEMMA_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          CONV_UID:                 ${{ github.event.client_payload.uid }}
-          CONV_ID:                  ${{ github.event.client_payload.conv_id }}
+          CONV_UID: ${{ github.event.client_payload.uid }}
+          CONV_ID: ${{ github.event.client_payload.conv_id }}
         run: node src/agent.js
