@@ -1,51 +1,43 @@
 # OFOQ Tools — Helper Functions Reference
-# هذه الدوال جاهزة للاستخدام المباشر في أي exec block
+# كل الدوال متاحة تلقائياً في exec blocks
 
-## كيفية الاستخدام
-انسخ الدالة المطلوبة واستخدمها مباشرة في كودك.
-المتغيرات المتاحة دائماً:
+## المتغيرات المتاحة دائماً
 - `__mem`  → نص memory.md الحالي
-- `__uid`  → Firebase UID للمستخدم
-- `fetch`  → HTTP client
+- `__uid`  → Firebase UID
+- `fetch`  → HTTP client محسّن
 
 ---
 
-## 1. getMemVal(key) — قراءة قيمة من CONFIG
+## 1. getMemVal(key) — قراءة قيمة من memory
 
 ```js
 function getMemVal(key) {
-  const lines = __mem.split('\n');
-  const line  = lines.find(l => l.startsWith(`${key}:`));
+  const line = __mem.split('\n').find(l => l.startsWith(key + ':'));
   if (!line) return null;
   const val = line.slice(key.length + 1).trim();
-  return val === 'null' ? null : val;
+  return (val === 'null' || val === '') ? null : val;
 }
-// مثال: const token = getMemVal('github_token');
 ```
 
 ---
 
-## 2. updateMemSection(section, newContent) — تحديث section في memory
+## 2. تحديث memory — عبر return فقط (لا firebase-admin)
 
 ```js
-async function updateMemSection(section, newContent) {
-  const sectionRe = new RegExp(
-    `(## ${section}\\n)[\\s\\S]*?(?=\\n## |$)`, 'g'
-  );
-  const updated = __mem.replace(sectionRe, `## ${section}\n${newContent}\n`);
-  // احفظ في Firestore
-  const { initializeApp, cert, getApps } = await import('firebase-admin/app');
-  const { getFirestore } = await import('firebase-admin/firestore');
-  if (!getApps().length) {
-    const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    initializeApp({ credential: cert(sa) });
-  }
-  const db = getFirestore();
-  await db.doc(`users/${__uid}/memory/doc`).set({ content: updated, updated_at: new Date().toISOString() });
-  return updated;
-}
-// مثال:
-// await updateMemSection('CONFIG', 'github_token: ghp_xxx\ngithub_status: verified\n...');
+// لتحديث section في memory.md، أعد هذا الشكل:
+return {
+  __mem_update__: {
+    section: 'CONFIG',
+    content: [
+      'github_token: ghp_xxx',
+      'github_repo_owner: myuser',
+      'github_repo_name: myrepo',
+      'github_status: verified',
+    ].join('\n')
+  },
+  message: 'تم الحفظ بنجاح'
+};
+// agent.js هو من يكتب في Firestore تلقائياً
 ```
 
 ---
@@ -62,16 +54,17 @@ async function ghFetch(path, token, method = 'GET', body = null) {
       'Content-Type': 'application/json',
       'User-Agent': 'OFOQ-Agent/6.0',
     },
-    body: body ? JSON.stringify(body) : null,
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(20000),
   });
-  return { ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) };
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data };
 }
-// مثال: const { ok, data } = await ghFetch('/user', getMemVal('github_token'));
 ```
 
 ---
 
-## 4. ytRefresh(clientId, secret, refreshToken) — تجديد YouTube Access Token
+## 4. ytRefresh(clientId, secret, refreshToken) — YouTube Token
 
 ```js
 async function ytRefresh(clientId, secret, refreshToken) {
@@ -79,19 +72,21 @@ async function ytRefresh(clientId, secret, refreshToken) {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: clientId, client_secret: secret,
-      refresh_token: refreshToken, grant_type: 'refresh_token',
+      client_id: clientId,
+      client_secret: secret,
+      refresh_token: refreshToken,
+      grant_type: 'refresh_token',
     }),
+    signal: AbortSignal.timeout(10000),
   });
   if (!r.ok) return null;
   return (await r.json()).access_token || null;
 }
-// مثال: const token = await ytRefresh(client_id, client_secret, refresh_token);
 ```
 
 ---
 
-## 5. getPendingVideos(owner, repo, token) — فيديوهات GitHub pending
+## 5. getPendingVideos(owner, repo, token) — فيديوهات pending
 
 ```js
 async function getPendingVideos(owner, repo, token) {
@@ -105,8 +100,13 @@ async function getPendingVideos(owner, repo, token) {
     .filter(a => /\.(mp4|mov|webm|mkv)$/i.test(a.name))
     .map(a => {
       const base = a.name.replace(/\.[^.]+$/, '');
-      const md   = assets.find(x => x.name === `${base}.md`);
-      return { id: a.id, name: a.name, base, url: a.browser_download_url, size: a.size, mdUrl: md?.browser_download_url || null };
+      const md = assets.find(x => x.name === `${base}.md`);
+      return {
+        id: a.id, name: a.name, base,
+        url: a.browser_download_url,
+        size: a.size,
+        mdUrl: md?.browser_download_url || null,
+      };
     });
 }
 ```
@@ -119,80 +119,102 @@ async function getPendingVideos(owner, repo, token) {
 function calcFajr(lat, lng, date = new Date()) {
   const D2R = Math.PI / 180;
   const y = date.getFullYear(), mo = date.getMonth() + 1, d = date.getDate();
-  const JD = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (mo + 1)) + d - 1524.5;
-  const n  = JD - 2451545.0;
-  const L  = ((280.460 + 0.9856474 * n) % 360 + 360) % 360;
-  const g  = ((357.528 + 0.9856003 * n) % 360) * D2R;
-  const lam = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * D2R;
+  const JD = Math.floor(365.25*(y+4716)) + Math.floor(30.6001*(mo+1)) + d - 1524.5;
+  const n = JD - 2451545.0;
+  const L = ((280.460 + 0.9856474*n) % 360 + 360) % 360;
+  const g = ((357.528 + 0.9856003*n) % 360) * D2R;
+  const lam = (L + 1.915*Math.sin(g) + 0.020*Math.sin(2*g)) * D2R;
   const eps = 23.439 * D2R;
-  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
-  const RA  = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
-  const noon = 12 - lng / 15 - ((L * D2R - RA) * 12 / Math.PI) + 2;
-  const cosH = (Math.sin(-18 * D2R) - Math.sin(lat * D2R) * Math.sin(dec)) / (Math.cos(lat * D2R) * Math.cos(dec));
+  const dec = Math.asin(Math.sin(eps)*Math.sin(lam));
+  const RA = Math.atan2(Math.cos(eps)*Math.sin(lam), Math.cos(lam));
+  const noon = 12 - lng/15 - ((L*D2R - RA)*12/Math.PI) + 2;
+  const cosH = (Math.sin(-18*D2R) - Math.sin(lat*D2R)*Math.sin(dec)) / (Math.cos(lat*D2R)*Math.cos(dec));
   if (Math.abs(cosH) > 1) return null;
-  const fTime = (((noon - Math.acos(cosH) * 12 / Math.PI) % 24) + 24) % 24;
-  const hh = Math.floor(fTime), mm = Math.floor((fTime - hh) * 60);
-  return { h: hh, m: mm, fmt: `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}` };
+  const fTime = (((noon - Math.acos(cosH)*12/Math.PI) % 24) + 24) % 24;
+  const hh = Math.floor(fTime), mm = Math.floor((fTime-hh)*60);
+  const p = n => String(n).padStart(2,'0');
+  return { h: hh, m: mm, fmt: `${p(hh)}:${p(mm)}` };
 }
-// مثال: const fajr = calcFajr(30.0444, 31.2357);
 ```
 
 ---
 
-## 7. makeSlots(startH, startM, count) — توزيع مواعيد النشر
+## 7. makeSlots(startH, startM, count) — مواعيد النشر
 
 ```js
 function makeSlots(startH, startM, count) {
-  let s = startH * 60 + startM;
-  const e = 23 * 60;
-  if (s >= e) s = 6 * 60 + 30;
-  const base = Math.floor((e - s) / Math.max(count, 1));
-  const out  = [];
+  let s = startH*60 + startM;
+  const e = 23*60;
+  if (s >= e) s = 6*60+30;
+  const base = Math.floor((e-s) / Math.max(count,1));
+  const out = [];
   for (let i = 0; i < count; i++) {
-    const jitter = Math.floor(Math.random() * 16) - 8;
-    const t = Math.min(e - 1, Math.max(s, s + i * base + jitter));
-    out.push(`${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`);
+    const j = Math.floor(Math.random()*16)-8;
+    const t = Math.min(e-1, Math.max(s, s+i*base+j));
+    const p = n => String(n).padStart(2,'0');
+    out.push(`${p(Math.floor(t/60))}:${p(t%60)}`);
   }
   return out.sort();
 }
-// مثال: const slots = makeSlots(fajr.h, fajr.m + 30, 4);
 ```
 
 ---
 
-## 8. fbDb() — Firestore instance
-
-```js
-async function fbDb() {
-  const { initializeApp, cert, getApps } = await import('firebase-admin/app');
-  const { getFirestore } = await import('firebase-admin/firestore');
-  if (!getApps().length) {
-    const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    initializeApp({ credential: cert(sa) });
-  }
-  return getFirestore();
-}
-// مثال: const db = await fbDb(); const doc = await db.doc('users/uid/memory/doc').get();
-```
-
----
-
-## 9. sleep(ms) — انتظار
+## 8. sleep(ms) — انتظار
 
 ```js
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-// مثال: await sleep(2000);
 ```
 
 ---
 
-## 10. cairoNow() — الوقت الحالي بتوقيت القاهرة
+## 9. cairoDate() / cairoNow() — توقيت القاهرة
 
 ```js
+function cairoDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+}
 function cairoNow() {
   return new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
 }
-function cairoDate() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }); // YYYY-MM-DD
-}
+```
+
+---
+
+## مثال كامل — حفظ GitHub token
+
+```js
+const token = 'ghp_xxx'; // من المستخدم
+const owner = 'myuser';
+const repo  = 'myrepo';
+
+// تحقق من صحة الـ token
+const { ok, data } = await ghFetch('/user', token);
+if (!ok) return { success: false, error: `GitHub فشل: ${data.message}` };
+
+// أعد تحديث memory — agent.js هو من يحفظ في Firestore
+return {
+  __mem_update__: {
+    section: 'CONFIG',
+    content: [
+      `github_token: ${token}`,
+      `github_repo_owner: ${owner}`,
+      `github_repo_name: ${repo}`,
+      `github_status: verified`,
+      `github_last_verified: ${new Date().toISOString()}`,
+      `youtube_client_id: ${getMemVal('youtube_client_id') || 'null'}`,
+      `youtube_client_secret: ${getMemVal('youtube_client_secret') || 'null'}`,
+      `youtube_refresh_token: ${getMemVal('youtube_refresh_token') || 'null'}`,
+      `youtube_access_token: ${getMemVal('youtube_access_token') || 'null'}`,
+      `youtube_status: ${getMemVal('youtube_status') || 'not_configured'}`,
+      `youtube_last_verified: ${getMemVal('youtube_last_verified') || 'null'}`,
+      `settings_lat: ${getMemVal('settings_lat') || '30.0444'}`,
+      `settings_lng: ${getMemVal('settings_lng') || '31.2357'}`,
+      `settings_fajr_offset_min: ${getMemVal('settings_fajr_offset_min') || '30'}`,
+      `settings_posts_per_day: ${getMemVal('settings_posts_per_day') || '4'}`,
+    ].join('\n')
+  },
+  verified_user: data.login,
+  message: `✅ GitHub verified — ${data.login}`
+};
 ```
