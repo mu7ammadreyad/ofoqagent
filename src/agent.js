@@ -64,7 +64,7 @@ function splitByAction(text) {
 // SECTION 2 — THINKING PASS (SSE, بدون tools → thinkingConfig يعمل)
 // ================================================================
 async function streamThinking(userMsg, soul, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
   const body = {
     contents:          [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 300)}` }] }],
     systemInstruction: { parts: [{ text: soul.slice(0, 1500) }] },
@@ -100,7 +100,7 @@ async function streamThinking(userMsg, soul, onChunk) {
 // SECTION 3 — MAIN MODEL CALL (لا tools parameter → لا thought_signature)
 // ================================================================
 async function callModel(messages, systemInstruction, useGemma = false) {
-  const model  = useGemma ? 'gemma-3-27b-it' : 'gemini-2.5-flash-preview-04-17';
+  const model  = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
   const apiKey = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url    = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
