@@ -1,260 +1,198 @@
-# tools.md — توثيق الـ Tools
+# OFOQ Tools — Helper Functions Reference
+# هذه الدوال جاهزة للاستخدام المباشر في أي exec block
 
-## OFOQ Agent v5.0 — Tool Reference
-
----
-
-## نظرة عامة
-
-الـ Tools هي البديل الكامل لـ eval() وcode generation.
-كل وظيفة يحتاجها الـ Agent موثّقة هنا بدقة كاملة.
-
-**المبدأ:** الـ AI يختار الـ tool المناسبة → الكود يُنفَّذ محلياً → النتيجة ترجع للـ AI.
+## كيفية الاستخدام
+انسخ الدالة المطلوبة واستخدمها مباشرة في كودك.
+المتغيرات المتاحة دائماً:
+- `__mem`  → نص memory.md الحالي
+- `__uid`  → Firebase UID للمستخدم
+- `fetch`  → HTTP client
 
 ---
 
-## 1. save_credentials
+## 1. getMemVal(key) — قراءة قيمة من CONFIG
 
-**الوظيفة:** حفظ بيانات تسجيل دخول منصة في Firebase Firestore
+```js
+function getMemVal(key) {
+  const lines = __mem.split('\n');
+  const line  = lines.find(l => l.startsWith(`${key}:`));
+  if (!line) return null;
+  const val = line.slice(key.length + 1).trim();
+  return val === 'null' ? null : val;
+}
+// مثال: const token = getMemVal('github_token');
+```
 
-**متى تُستخدم:** فوراً عندما يعطي المستخدم أي token أو ID أو secret
+---
 
-**Parameters:**
-```json
-{
-  "platform": "github | youtube | settings",
-  "data": {
-    "token":          "GitHub Personal Access Token",
-    "repo_owner":     "اسم المستخدم على GitHub",
-    "repo_name":      "اسم الـ repository",
-    "client_id":      "YouTube OAuth Client ID",
-    "client_secret":  "YouTube OAuth Client Secret",
-    "refresh_token":  "YouTube Refresh Token",
-    "access_token":   "YouTube Access Token (مؤقت)"
+## 2. updateMemSection(section, newContent) — تحديث section في memory
+
+```js
+async function updateMemSection(section, newContent) {
+  const sectionRe = new RegExp(
+    `(## ${section}\\n)[\\s\\S]*?(?=\\n## |$)`, 'g'
+  );
+  const updated = __mem.replace(sectionRe, `## ${section}\n${newContent}\n`);
+  // احفظ في Firestore
+  const { initializeApp, cert, getApps } = await import('firebase-admin/app');
+  const { getFirestore } = await import('firebase-admin/firestore');
+  if (!getApps().length) {
+    const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    initializeApp({ credential: cert(sa) });
   }
+  const db = getFirestore();
+  await db.doc(`users/${__uid}/memory/doc`).set({ content: updated, updated_at: new Date().toISOString() });
+  return updated;
 }
-```
-
-**Returns:**
-```json
-{ "success": true, "saved": "token, repo_owner, repo_name", "message": "تم الحفظ في Firebase" }
-```
-
-**ملاحظات:**
-- يدعم فقط: github, youtube, settings في v1
-- البيانات مشفّرة في Firestore ومعزولة per-user
-- لا يحفظ كلمات المرور أبداً — فقط tokens
-
----
-
-## 2. verify_connection
-
-**الوظيفة:** التحقق من صحة الـ token لمنصة معينة واختبار الاتصال فعلياً
-
-**متى تُستخدم:** بعد أي `save_credentials` مباشرة
-
-**Parameters:**
-```json
-{ "platform": "github | youtube" }
-```
-
-**What it does:**
-- **github:** يستدعي `GET /user` على GitHub API
-- **youtube:** يجرّب تجديد الـ access token بـ refresh_token
-
-**Returns:**
-```json
-{
-  "success": true,
-  "data": {
-    "login": "github_username",
-    "name": "Full Name",
-    "public_repos": 42
-  }
-}
-```
-
-**عند الفشل:**
-```json
-{
-  "success": false,
-  "error": "GitHub فشل: 401 — تحقق من الـ token"
-}
+// مثال:
+// await updateMemSection('CONFIG', 'github_token: ghp_xxx\ngithub_status: verified\n...');
 ```
 
 ---
 
-## 3. list_pending_videos
+## 3. ghFetch(path, token, method?, body?) — GitHub API
 
-**الوظيفة:** جلب قائمة الفيديوهات المعلقة من GitHub Release بعلامة `pending`
-
-**متى تُستخدم:** عندما يسأل المستخدم عن الفيديوهات أو قبل بناء الخطة
-
-**Parameters:** لا يوجد
-
-**Returns:**
-```json
-{
-  "success": true,
-  "data": {
-    "count": 5,
-    "videos": [
-      { "name": "quran_fajr_day45", "size_mb": "23.5", "has_meta": true },
-      { "name": "hadith_morning_01", "size_mb": "18.2", "has_meta": false }
-    ]
-  }
-}
-```
-
-**ملاحظات:**
-- يبحث عن Release بعلامة `pending` في الـ repo المُهيأ
-- كل فيديو يكون: `videoname.mp4` + `videoname.md` (اختياري للعنوان والوصف)
-- يعرض أول 10 فيديوهات فقط في الـ response
-
----
-
-## 4. build_daily_plan
-
-**الوظيفة:** بناء خطة النشر اليومية الذكية وحفظها في Firestore + إطلاق GitHub Workflow للنشر
-
-**متى تُستخدم:** عندما يطلب المستخدم بدء النشر أو بناء الخطة
-
-**Parameters:** لا يوجد
-
-**ما يفعله:**
-1. يحسب وقت الفجر (حسب الموقع في settings)
-2. يجلب الفيديوهات من GitHub pending release
-3. يحسب أفضل مواعيد النشر (30 دق+ بعد الفجر، موزعة على اليوم)
-4. يحفظ الخطة في Firestore
-5. يُطلق GitHub Actions workflow للنشر التلقائي
-
-**Returns:**
-```json
-{
-  "success": true,
-  "data": {
-    "date": "2025-04-12",
-    "fajr": "04:48",
-    "slots": 4,
-    "schedule": "• 05:20 → youtube  | quran_fajr_day45\n• 08:15 → youtube  | hadith_morning_01"
-  }
-}
-```
-
----
-
-## 5. health_check
-
-**الوظيفة:** فحص صحة جميع التوكنز المُهيأة وعرض التقرير
-
-**متى تُستخدم:** عندما يطلب المستخدم فحص الصحة أو قبل بناء الخطة
-
-**Parameters:** لا يوجد
-
-**Returns:**
-```json
-{
-  "success": true,
-  "data": {
-    "results": {
-      "github": "✅ سليم",
-      "youtube": "❌ Token منتهي"
+```js
+async function ghFetch(path, token, method = 'GET', body = null) {
+  const r = await fetch(`https://api.github.com${path}`, {
+    method,
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json',
+      'User-Agent': 'OFOQ-Agent/6.0',
     },
-    "warnings": ["⚠️ YouTube refresh_token منتهي — يحتاج تجديد"],
-    "all_ok": false
+    body: body ? JSON.stringify(body) : null,
+  });
+  return { ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) };
+}
+// مثال: const { ok, data } = await ghFetch('/user', getMemVal('github_token'));
+```
+
+---
+
+## 4. ytRefresh(clientId, secret, refreshToken) — تجديد YouTube Access Token
+
+```js
+async function ytRefresh(clientId, secret, refreshToken) {
+  const r = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId, client_secret: secret,
+      refresh_token: refreshToken, grant_type: 'refresh_token',
+    }),
+  });
+  if (!r.ok) return null;
+  return (await r.json()).access_token || null;
+}
+// مثال: const token = await ytRefresh(client_id, client_secret, refresh_token);
+```
+
+---
+
+## 5. getPendingVideos(owner, repo, token) — فيديوهات GitHub pending
+
+```js
+async function getPendingVideos(owner, repo, token) {
+  const { ok, data: releases } = await ghFetch(`/repos/${owner}/${repo}/releases`, token);
+  if (!ok || !Array.isArray(releases)) return [];
+  const rel = releases.find(r => r.tag_name === 'pending');
+  if (!rel) return [];
+  const { data: assets } = await ghFetch(`/repos/${owner}/${repo}/releases/${rel.id}/assets`, token);
+  if (!Array.isArray(assets)) return [];
+  return assets
+    .filter(a => /\.(mp4|mov|webm|mkv)$/i.test(a.name))
+    .map(a => {
+      const base = a.name.replace(/\.[^.]+$/, '');
+      const md   = assets.find(x => x.name === `${base}.md`);
+      return { id: a.id, name: a.name, base, url: a.browser_download_url, size: a.size, mdUrl: md?.browser_download_url || null };
+    });
+}
+```
+
+---
+
+## 6. calcFajr(lat, lng, date?) — حساب وقت الفجر
+
+```js
+function calcFajr(lat, lng, date = new Date()) {
+  const D2R = Math.PI / 180;
+  const y = date.getFullYear(), mo = date.getMonth() + 1, d = date.getDate();
+  const JD = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (mo + 1)) + d - 1524.5;
+  const n  = JD - 2451545.0;
+  const L  = ((280.460 + 0.9856474 * n) % 360 + 360) % 360;
+  const g  = ((357.528 + 0.9856003 * n) % 360) * D2R;
+  const lam = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * D2R;
+  const eps = 23.439 * D2R;
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const RA  = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam));
+  const noon = 12 - lng / 15 - ((L * D2R - RA) * 12 / Math.PI) + 2;
+  const cosH = (Math.sin(-18 * D2R) - Math.sin(lat * D2R) * Math.sin(dec)) / (Math.cos(lat * D2R) * Math.cos(dec));
+  if (Math.abs(cosH) > 1) return null;
+  const fTime = (((noon - Math.acos(cosH) * 12 / Math.PI) % 24) + 24) % 24;
+  const hh = Math.floor(fTime), mm = Math.floor((fTime - hh) * 60);
+  return { h: hh, m: mm, fmt: `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}` };
+}
+// مثال: const fajr = calcFajr(30.0444, 31.2357);
+```
+
+---
+
+## 7. makeSlots(startH, startM, count) — توزيع مواعيد النشر
+
+```js
+function makeSlots(startH, startM, count) {
+  let s = startH * 60 + startM;
+  const e = 23 * 60;
+  if (s >= e) s = 6 * 60 + 30;
+  const base = Math.floor((e - s) / Math.max(count, 1));
+  const out  = [];
+  for (let i = 0; i < count; i++) {
+    const jitter = Math.floor(Math.random() * 16) - 8;
+    const t = Math.min(e - 1, Math.max(s, s + i * base + jitter));
+    out.push(`${String(Math.floor(t/60)).padStart(2,'0')}:${String(t%60).padStart(2,'0')}`);
   }
+  return out.sort();
 }
+// مثال: const slots = makeSlots(fajr.h, fajr.m + 30, 4);
 ```
 
 ---
 
-## 6. get_status
+## 8. fbDb() — Firestore instance
 
-**الوظيفة:** عرض الحالة الكاملة للنظام
-
-**متى تُستخدم:** عندما يسأل المستخدم "ما الوضع؟" أو "هل النظام شغّال؟"
-
-**Parameters:** لا يوجد
-
-**Returns:**
-```json
-{
-  "success": true,
-  "data": {
-    "fajr": "04:48",
-    "workflow": "completed",
-    "plan_active": true,
-    "published_today": 2,
-    "github": "verified",
-    "youtube": "verified"
+```js
+async function fbDb() {
+  const { initializeApp, cert, getApps } = await import('firebase-admin/app');
+  const { getFirestore } = await import('firebase-admin/firestore');
+  if (!getApps().length) {
+    const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    initializeApp({ credential: cert(sa) });
   }
+  return getFirestore();
 }
+// مثال: const db = await fbDb(); const doc = await db.doc('users/uid/memory/doc').get();
 ```
 
 ---
 
-## 7. fetch_github
+## 9. sleep(ms) — انتظار
 
-**الوظيفة:** استعلام GitHub API لجلب أي بيانات
-
-**متى تُستخدم:** لأي سؤال عن الـ repo يحتاج بيانات live
-
-**Parameters:**
-```json
-{ "path": "/repos/owner/repo/releases" }
-```
-
-**أمثلة على الـ path:**
-- `/repos/{owner}/{repo}/releases` — كل الـ releases
-- `/repos/{owner}/{repo}/contents/` — محتوى الـ root
-- `/repos/{owner}/{repo}/releases/assets/{asset_id}` — أصل معين
-- `/user` — معلومات المستخدم
-- `/user/repos` — كل الـ repos
-
-**Returns:**
-```json
-{
-  "success": true,
-  "data": { "count": 3, "items": ["pending", "published", "archive"] }
-}
+```js
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// مثال: await sleep(2000);
 ```
 
 ---
 
-## 8. update_settings
+## 10. cairoNow() — الوقت الحالي بتوقيت القاهرة
 
-**الوظيفة:** تحديث إعدادات الموقع وجدول النشر
-
-**متى تُستخدم:** عندما يريد المستخدم تغيير الموقع أو عدد المنشورات
-
-**Parameters:**
-```json
-{
-  "location_lat": "30.0444",
-  "location_lng": "31.2357",
-  "posts_per_day": "4",
-  "fajr_offset_minutes": "30"
+```js
+function cairoNow() {
+  return new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
+}
+function cairoDate() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }); // YYYY-MM-DD
 }
 ```
-
-**Returns:**
-```json
-{ "success": true, "updated": { "posts_per_day": "6" } }
-```
-
----
-
-## قواعد استخدام الـ Tools
-
-### ترتيب الأولويات:
-1. دائماً `save_credentials` → ثم `verify_connection` مباشرة
-2. دائماً `health_check` → قبل `build_daily_plan`
-3. دائماً `list_pending_videos` → قبل تأكيد الخطة
-
-### عند فشل الـ Tool:
-- أعد المحاولة مرة واحدة بنفس الـ parameters
-- لو فشلت مرتين → أخبر المستخدم بالخطأ الدقيق
-- لا تتجاهل الأخطاء أبداً
-
-### الـ Tools المحظورة (لأسباب أمنية):
-- لا توجد — لكن يُحظر استخدام أي tool بشكل يُضر ببيانات المستخدم
