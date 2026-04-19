@@ -55,14 +55,20 @@ export function cairoDate() {
 // FIREBASE — MEMORY + MD DOCS
 // ================================================================
 
-// ← Firebase Service Account — مؤقت للتطوير، انقله لـ GitHub Secret لاحقاً
+// Firebase Service Account — مؤقت للتطوير، انقله لـ GitHub Secret لاحقاً
 const FIREBASE_SA_HARDCODED = process.env.FIREBASE_SERVICE_ACCOUNT || JSON.stringify({
-  // ضع هنا محتوى ملف serviceAccount.json مؤقتاً
-  // مثال: "type": "service_account", "project_id": "...", ...
-  // استبدله بـ FIREBASE_SERVICE_ACCOUNT secret في الإنتاج
-  _placeholder: true,
+  "type": "service_account",
+  "project_id": "ofoqagent",
+  "private_key_id": "bbcba2ec33d0799062dec414b90bf5dc81f95c30",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCzyOW9G5urP80f\nB+5+b1UM0n8X6vwvZ7jZEEQXhm3jpDGyC2Su0ornvFTlPpwYmDY9eoA5vkn0/Cs0\nqoYFOcYdT3rlnrVZ0HD4USsqcsG1futmtOMeIwBByT2CSHPxYf1P738ccfqg7NmX\nylad10Xj0pB0KO/8KeoaHcY5bYMiy+yZvKCzdQoCbZAXWAbe1g6NRGPkIi2c+Pp3\nCZtI6t3QGK9Pn8zreEDd2Spbwid4IFgw0uqdavroIPtI8SxlpJPhhQED3j+ZR1r7\nTgO4v8uvZAhnuHiC/oD8LG8PEZxrTumBhyusoglUXkHK6ctdXLZM2MVYR8fP0QLq\njAUicjdTAgMBAAECggEAK8RsHWoDryB0nKnPJyuOTnVOKHH128qJ5xn9IacByInX\n6Uq5w4+Q7lJcboSb9qbTiYrxfV00XvYmxIcA4nPKpacMOas15fwHDISiGA7g1oDj\n6Nh/c/48WUeW+EkQJMLgqp2Y2cFrrNKMNFY3WOyn4IsJzKWMqtw/WAVIlQFyi70l\nz9MFfffkPZVMEK1gfTb+MMONTqywpAHpIxt78QtukBuBumfFVdktVdoWJRPcmTi5\nnkXWcWoqyM4s2zaAi25NUOb180VBKboDzpMxUmywaj/WXovpYUF8wlB+iMGDQ0Xa\nIsvXl+tcRDQoNeoHy5bWLaXX0F781q1wA58Zb5TT5QKBgQDaCM0Pc/2kwdqcpemv\nL+5tijZ8G1R3PWFxsXd+5mau+r/z2Oy8fEEQ9FncGycU+ANpc0PabDjYh2yxjpBJ\nevepOsKo+wOwqLl4FbGUJZZE5sKXJpRO2BI+g6puNn2GEiVDrEtHCVkSPmOvkXVw\n2zWskipQK2JAtLKMh+ylxiY1vwKBgQDTFxBcDH3FMo68kUQ4Viw5vPaO0NWeKlf7\ntNExiFJmT34rW/m5rH5e4p1ub/C0eMJJDaa8MHKstSMSjIW3Cn8UC7zmFTShrmc9\naKv6SZW1bemhOYf3vz0hH4G1ecWo899wLpeo63mcz+aWdZbz3NMAtCy0kXc8GRW0\n26MJuunrbQKBgC+79YkIj+NePYpGGJ8uEzkQJVWOdjOU0JyfidXSg3CTnSq5tzqc\nyXH4zSOPHkNM+RJBFf3f66IcJAPLfnNX5Ji8MJnmOqyWg+Rye2o/wGJdUwTcgWOx\nkmz1Tn7KlzifCGGEewaWWVXRKunpIpkOpPWfGnxqwxv/c4eoynqQoxTpAoGAYqnd\nE6kjABDpdmnPoSVl9nbEJ2yk7BCOny+ct7IoEXoGVu3eg1KEnoT9YKkhsLjg1pRy\n4nMipmbjxb+4oB1f2FbELCatOwTxbFqIR6wtNWfyU1E4pCvWvqyjS9dm89lJDn44\nlNO7O/hQpvK/Y6xLU4DjhGKZgJWY97fRNLMQsuECgYEAtBpfMfzTxakkI1q1pfXO\nLBmpeyC+fntNvVICxiLhNrgbTcsouoJC0Xb5rbLSt+A96uMKr0P1wyqstSpHLXCO\nWYPlFSSVPNkS791zeDPtePHi3KBkUg7GkoObXeaI/+yMxLqnBEVMIWmZaaito/s4\n1a2XnedbOC93Jaoe+q4LzPM=\n-----END PRIVATE KEY-----\n",
+  "client_email": "firebase-adminsdk-fbsvc@ofoqagent.iam.gserviceaccount.com",
+  "client_id": "106152864292741730046",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40ofoqagent.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
 });
-
 let _db = null;
 
 async function getDb() {
