@@ -281,7 +281,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
       </filter>
       <mask id="ring-mask">
         <rect width="500" height="500" fill="black"/>
-        <circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="60"/>
+        <circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="65"/>
       </mask>
       <linearGradient id="fade-top" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#111111" stop-opacity="1"/>
@@ -294,7 +294,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
         <stop offset="100%" stop-color="#111111" stop-opacity="1"/>
       </linearGradient>
     </defs>
-    <circle cx="250" cy="250" r="175" fill="none" stroke="#111111" stroke-width="60"/>
+    <circle cx="250" cy="250" r="175" fill="none" stroke="#111111" stroke-width="65"/>
     <g mask="url(#ring-mask)">
       <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
       <g filter="url(#mesh-blur)">
@@ -308,7 +308,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
     </g>
   </svg>
 
-  <div style="font-size:22px;font-weight:500;direction:rtl;">أفق — OFOQ Agent</div>
+  <div style="font-size:22px;font-weight:500;direction:rtl;">Ofoq Agent</div>
   <div style="font-size:13px;color:var(--text-sub);direction:rtl;">سجّل دخولك للمتابعة</div>
 
   <div class="login-box">
@@ -389,7 +389,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="72" height="72" style="margin-bottom:12px">
         <defs>
           <filter id="mb2" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="26"/></filter>
-          <mask id="rm2"><rect width="500" height="500" fill="black"/><circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="60"/></mask>
+          <mask id="rm2"><rect width="500" height="500" fill="black"/><circle cx="250" cy="250" r="175" fill="none" stroke="white" stroke-width="65"/></mask>
           <linearGradient id="ft2" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#111" stop-opacity="1"/><stop offset="35%" stop-color="#111" stop-opacity=".9"/>
             <stop offset="100%" stop-color="#111" stop-opacity="0"/>
@@ -399,7 +399,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
             <stop offset="100%" stop-color="#111" stop-opacity="1"/>
           </linearGradient>
         </defs>
-        <circle cx="250" cy="250" r="175" fill="none" stroke="#111" stroke-width="60"/>
+        <circle cx="250" cy="250" r="175" fill="none" stroke="#111" stroke-width="65"/>
         <g mask="url(#rm2)">
           <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
           <g filter="url(#mb2)">
@@ -415,11 +415,13 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
       <h1 class="hero-title">أفق — OFOQ Agent</h1>
       <p class="hero-sub">نشر المحتوى الإسلامي تلقائياً · GitHub Actions · Firebase</p>
       <div class="chips" id="heroChips">
+        <div class="chip" data-step="0" onclick="runScenario(0)"><i class="ph ph-key"></i> إعداد Dispatch Token</div>
         <div class="chip" data-step="1" onclick="runScenario(1)"><i class="ph ph-github-logo"></i> ربط GitHub</div>
         <div class="chip" data-step="2" onclick="runScenario(2)"><i class="ph ph-youtube-logo"></i> إضافة YouTube</div>
         <div class="chip" data-step="3" onclick="runScenario(3)"><i class="ph ph-rocket-launch"></i> ابدأ النشر</div>
+        <div class="chip" data-step="4" onclick="runScenario(4)"><i class="ph ph-calendar-dots"></i> جدولة يومية</div>
         <div class="chip" onclick="fillInput('ما هي حالة النظام؟')"><i class="ph ph-gauge"></i> حالة النظام</div>
-        <div class="chip" onclick="fillInput('اعرض الفيديوهات المعلقة')"><i class="ph ph-video"></i> الفيديوهات</div>
+        <div class="chip" onclick="fillInput('اعرض الجداول النشطة')"><i class="ph ph-list-dashes"></i> الجداول</div>
         <div class="chip" onclick="fillInput('افحص صحة التوكنز')"><i class="ph ph-shield-check"></i> فحص الصحة</div>
       </div>
     </div>
@@ -465,7 +467,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
 // ================================================================
 // ← استبدل هذه القيم بمشروعك من Firebase Console → Project Settings
 // ================================================================
-const firebaseConfig = {
+const FIREBASE_CONFIG = {
   apiKey: "AIzaSyBMgoRf2EbKpOPe-tcBqrAGjQVvsZ4IKdk",
   authDomain: "ofoqagent.firebaseapp.com",
   projectId: "ofoqagent",
@@ -479,11 +481,16 @@ const firebaseConfig = {
 // ← GitHub repo للـ Agent (صاحب الكود — مش repo الفيديوهات)
 const GITHUB_OWNER       = "mu7ammadreyad";
 const GITHUB_AGENT_REPO  = "ofoqagent";
+// ← الـ GitHub Personal Access Token بصلاحية "workflow"
+// يُستخدم لتشغيل GitHub Actions من الـ frontend (repository_dispatch)
+// اعمل Token من: github.com → Settings → Developer settings → PAT → Tokens (classic)
+// الصلاحيات المطلوبة: repo + workflow
+const GITHUB_TOKEN       = "";
 
 // ================================================================
 // FIREBASE INIT
 // ================================================================
-firebase.initializeApp(firebaseConfig)
+firebase.initializeApp(FIREBASE_CONFIG);
 const fbAuth = firebase.auth();
 const db     = firebase.firestore();
 
@@ -589,9 +596,16 @@ function scrollBottom() { const c=document.getElementById('chatScroll'); c.scrol
 
 // ── Scenarios ──────────────────────────────────────────────────
 const SCENARIOS = {
-  1: { msg: 'مرحباً أفق!\ntoken: ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nrepo_owner: myusername\nrepo_name: ofoq-videos' },
+  // الخطوة 0: إعداد dispatch token (مطلوب مرة واحدة فقط)
+  0: { msg: 'إعداد الـ dispatch token:\ngithub_dispatch_token: ghp_YOUR_GITHUB_PAT_WITH_WORKFLOW_SCOPE\n\nتلميح: الـ dispatch token هو GitHub PAT بصلاحية "workflow" — يُستخدم لتشغيل GitHub Actions من الـ frontend.' },
+  // الخطوة 1: ربط GitHub
+  1: { msg: 'مرحباً أفق! هذا مفتاح GitHub:\ntoken: ghp_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\nrepo_owner: myusername\nrepo_name: ofoq-videos' },
+  // الخطوة 2: إضافة YouTube
   2: { msg: 'هأضيف YouTube:\nclient_id: 123456789.apps.googleusercontent.com\nclient_secret: GOCSPX-xxxxxxxx\nrefresh_token: 1//0gXXXXXXXXXXXXXXXX' },
+  // الخطوة 3: بدء النشر
   3: { msg: 'كل شيء جاهز! ابدأ خطة النشر اليومية.' },
+  // الخطوة 4: جدولة يومية
+  4: { msg: 'أريد جدولة يومية لمدة شهر — كل يوم الساعة 12 ظهراً تقوم بوضع خطة النشر اليومية.' },
 };
 function runScenario(s) {
   const sc=SCENARIOS[s]; if(!sc) return;
@@ -600,20 +614,58 @@ function runScenario(s) {
   document.querySelector(`.chip[data-step="${s}"]`)?.classList.add('active');
 }
 
-// ── File ───────────────────────────────────────────────────────
-let currentFile = null;
+// ── File Upload → Firestore ────────────────────────────────────
+let currentFile = null;    // { fileId, name, mimeType, size, preview }
+let uploadedFiles = [];    // list for sidebar
+
 function handleFileSelect(input) {
   const f = input.files[0]; if (!f) return;
-  const r = new FileReader();
-  r.onload = e => {
-    currentFile = { name: f.name, content: e.target.result };
-    const pr = document.getElementById('filePreview');
-    pr.style.display = 'flex';
-    document.getElementById('previewName').textContent = f.name;
+  const maxSize = 2 * 1024 * 1024; // 2MB limit for Firestore text storage
+  if (f.size > maxSize) { alert(`الملف كبير جداً — الحد الأقصى 2MB. حجم الملف: ${(f.size/1024/1024).toFixed(1)}MB`); return; }
+
+  const reader = new FileReader();
+  const isText = f.type.startsWith('text/') || /\.(txt|md|json|csv|js|py|html|css|xml|yml|yaml|sh|log)$/i.test(f.name);
+
+  reader.onload = async (e) => {
+    const fileId   = `file_${Date.now()}`;
+    const content  = e.target.result;
+    const textContent = isText ? content : null;
+
+    // Show preview
+    currentFile = { fileId, name: f.name, mimeType: f.type || 'application/octet-stream', size: f.size, preview: f.name };
+    document.getElementById('filePreview').style.display = 'flex';
+    document.getElementById('previewName').textContent   = `${f.name} (جارٍ الرفع...)`;
+
+    // Upload to Firestore
+    if (currentUser) {
+      try {
+        await db.doc(`users/${currentUser.uid}/files/${fileId}`).set({
+          fileId, name: f.name, mimeType: f.type || 'application/octet-stream',
+          size: f.size, textContent: isText ? content.slice(0, 500_000) : null,
+          encoding: 'utf8', uploaded_at: firebase.firestore.Timestamp.now(),
+        });
+        document.getElementById('previewName').textContent = `📎 ${f.name} ✅ (${(f.size/1024).toFixed(0)}KB)`;
+      } catch(err) {
+        document.getElementById('previewName').textContent = `📎 ${f.name} ⚠️ فشل الرفع`;
+        console.error('File upload failed:', err);
+      }
+    }
   };
-  r.readAsDataURL(f);
+
+  isText ? reader.readAsText(f) : reader.readAsDataURL(f);
 }
-function clearFile() { currentFile=null; document.getElementById('fileInput').value=''; document.getElementById('filePreview').style.display='none'; }
+
+function clearFile() {
+  currentFile = null;
+  document.getElementById('fileInput').value = '';
+  document.getElementById('filePreview').style.display = 'none';
+}
+
+// Build file context message
+function buildFileMsg(text, file) {
+  if (!file) return text;
+  return `[ملف مرفوع — ID: ${file.fileId} | الاسم: ${file.name} | النوع: ${file.mimeType} | الحجم: ${(file.size/1024).toFixed(0)}KB]\n\nلقراءة محتوى الملف استخدم: read_file(file_id="${file.fileId}")\n\n${text}`;
+}
 
 // ================================================================
 // STATE
@@ -648,10 +700,13 @@ async function sendMessage(text, fileData) {
   }
 
   document.getElementById('hero').classList.add('gone');
-  const payload = fileData?.content ? `[File: ${fileData.name}]\n${atob(fileData.content.split(',')[1])}\n\n${text}` : text;
 
-  renderMsg('user', text);
-  chatHistory.push({ role: 'user', content: text });
+  // Build payload — file context included if a file was uploaded
+  const payload = buildFileMsg(text || '(بدون نص — راجع الملف المرفوع)', fileData);
+  const displayText = text || `📎 ${fileData?.name || 'ملف'}`;
+
+  renderMsg('user', displayText);
+  chatHistory.push({ role: 'user', content: displayText });
   document.getElementById('userInput').value = ''; autoResize(document.getElementById('userInput'));
   clearFile(); isGenerating = true; setBusy(true);
 
@@ -661,7 +716,7 @@ async function sendMessage(text, fileData) {
     status:          'pending',
     created_at:      firebase.firestore.Timestamp.now(),
     user_message:    payload,
-    history:         chatHistory.slice(0, -1), // exclude last user msg (it's in user_message)
+    history:         chatHistory.slice(0, -1),
     thinking_chunks: [],
     tool_updates:    [],
     final_response:  null,
@@ -720,19 +775,13 @@ async function sendMessage(text, fileData) {
 
 // ================================================================
 // DISPATCH GITHUB ACTION
+// يستخدم GITHUB_TOKEN المُعرَّف في أعلى الملف
 // ================================================================
 async function dispatchGitHubAction(uid, convId) {
-  // الـ GitHub dispatch token مخزّن في Firestore settings (يضيفه المستخدم مرة واحدة)
-  let dispatchToken = '';
-  try {
-    const cfg = await db.doc(`users/${uid}/config/main`).get();
-    dispatchToken = cfg.data()?.settings?.github_dispatch_token || cfg.data()?.github?.token || '';
-  } catch {}
-
-  if (!dispatchToken) {
+  if (!GITHUB_TOKEN || GITHUB_TOKEN === 'ghp_YOUR_GITHUB_PAT_HERE') {
     await db.doc(`users/${uid}/conversations/${convId}`).update({
       status: 'error',
-      error:  'github_dispatch_token غير موجود — أضفه في الإعدادات (Settings → update_settings)',
+      error:  '⚠️ GITHUB_TOKEN غير مُهيأ — افتح index.html وعدّل الثابت GITHUB_TOKEN في أعلى الكود',
     });
     return;
   }
@@ -740,7 +789,7 @@ async function dispatchGitHubAction(uid, convId) {
   const resp = await fetch(`https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_AGENT_REPO}/dispatches`, {
     method:  'POST',
     headers: {
-      Authorization:  `token ${dispatchToken}`,
+      Authorization:  `token ${GITHUB_TOKEN}`,
       Accept:         'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent':   'OFOQ-Frontend/5.0',
