@@ -238,7 +238,7 @@ try {
 // ================================================================
 
 async function streamThinking(messages, systemInstruction, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-31b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
 
   const body = {
     contents:          messages.slice(-3), // last 3 messages for context
@@ -294,7 +294,7 @@ async function streamThinking(messages, systemInstruction, onChunk) {
 // ================================================================
 
 async function callModel(messages, systemInstruction, useGemma = false) {
-  const modelId = useGemma ? 'gemini-3-flash-preview' : 'gemini-3-flash-preview';
+  const modelId = useGemma ? 'gemma-4-31b-it' : 'gemma-4-31b-it';
   const apiKey  = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url     = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
 
