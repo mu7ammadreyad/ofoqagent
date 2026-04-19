@@ -294,7 +294,7 @@ async function streamThinking(messages, systemInstruction, onChunk) {
 // ================================================================
 
 async function callModel(messages, systemInstruction, useGemma = false) {
-  const modelId = useGemma ? 'gemma-3-27b-it' : 'gemini-2.5-flash-preview-04-17';
+  const modelId = useGemma ? 'gemini-3-flash-preview' : 'gemini-3-flash-preview';
   const apiKey  = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url     = `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${apiKey}`;
 
