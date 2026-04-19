@@ -111,7 +111,7 @@ async function callModel(messages, systemInstruction, useGemma = false) {
   })).filter(m => m.parts.length);
 
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 200_000);
+  const timer = setTimeout(() => ctrl.abort(), 2000_000);
 
   let resp;
   try {
