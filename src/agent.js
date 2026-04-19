@@ -238,7 +238,7 @@ try {
 // ================================================================
 
 async function streamThinking(messages, systemInstruction, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
 
   const body = {
     contents:          messages.slice(-3), // last 3 messages for context
