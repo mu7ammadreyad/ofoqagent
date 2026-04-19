@@ -183,38 +183,23 @@ function cairoNow() {
 
 ## مثال كامل — حفظ GitHub token
 
-```js
-const token = 'ghp_xxx'; // من المستخدم
-const owner = 'myuser';
-const repo  = 'myrepo';
+```
+// هذا مثال للـ AI — ليس كوداً يُحقَن في الـ sandbox
+// اكتب كودك في exec block داخل المحادثة
 
-// تحقق من صحة الـ token
+const token = getMemVal('github_token');
 const { ok, data } = await ghFetch('/user', token);
-if (!ok) return { success: false, error: `GitHub فشل: ${data.message}` };
+if (!ok) return { success: false, error: 'GitHub فشل: ' + data.message };
 
-// أعد تحديث memory — agent.js هو من يحفظ في Firestore
 return {
   __mem_update__: {
     section: 'CONFIG',
     content: [
-      `github_token: ${token}`,
-      `github_repo_owner: ${owner}`,
-      `github_repo_name: ${repo}`,
-      `github_status: verified`,
-      `github_last_verified: ${new Date().toISOString()}`,
-      `youtube_client_id: ${getMemVal('youtube_client_id') || 'null'}`,
-      `youtube_client_secret: ${getMemVal('youtube_client_secret') || 'null'}`,
-      `youtube_refresh_token: ${getMemVal('youtube_refresh_token') || 'null'}`,
-      `youtube_access_token: ${getMemVal('youtube_access_token') || 'null'}`,
-      `youtube_status: ${getMemVal('youtube_status') || 'not_configured'}`,
-      `youtube_last_verified: ${getMemVal('youtube_last_verified') || 'null'}`,
-      `settings_lat: ${getMemVal('settings_lat') || '30.0444'}`,
-      `settings_lng: ${getMemVal('settings_lng') || '31.2357'}`,
-      `settings_fajr_offset_min: ${getMemVal('settings_fajr_offset_min') || '30'}`,
-      `settings_posts_per_day: ${getMemVal('settings_posts_per_day') || '4'}`,
+      'github_token: ' + token,
+      'github_status: verified',
+      // باقي الـ settings كما هي في memory
     ].join('\n')
   },
-  verified_user: data.login,
-  message: `✅ GitHub verified — ${data.login}`
+  message: '✅ تم التحقق من GitHub'
 };
 ```
