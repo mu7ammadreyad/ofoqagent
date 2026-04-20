@@ -8,7 +8,7 @@ import {
   loadMdDoc, saveMdDoc,
   saveConv, updateConv, getConv,
   appendFirestoreArray,
-  executeCode,
+  executeShell,
 } from './tools.js';
 
 // ── Env ───────────────────────────────────────────────────────────
@@ -23,52 +23,57 @@ if (!CONV_ID)    { console.error('❌ CONV_ID missing');         process.exit(1)
 
 // ================================================================
 // SECTION 1 — ACTION PARSER
-// ── يستخرج <action type="exec" lang="js|py">...</action> ──
+//
+// صيغتان فقط:
+//
+//   <action type="shell">
+//   bash commands here
+//   </action>
+//
+//   <action type="memory" section="CONFIG">
+//   github_token: ghp_xxx
+//   github_status: verified
+//   </action>
+//
+// النص خارج الـ actions = تفكير / رد نهائي
 // ================================================================
 
-function parseAction(text) {
-  const re = /<action\s+type=["']exec["'][^>]*>([\s\S]*?)<\/action>/i;
-  const m  = text.match(re);
-  if (!m) return null;
+function parseActions(text) {
+  const actions = [];
+  // استخرج كل <action ...>...</action> مرتبة حسب الظهور
+  const re = /<action\s+([^>]*)>([\s\S]*?)<\/action>/gi;
+  let   m;
+  while ((m = re.exec(text)) !== null) {
+    const attrsStr = m[1];
+    const body     = m[2].trim();
 
-  // استخرج lang attribute
-  const langM = text.match(/<action[^>]+lang=["'](\w+)["']/i);
-  const lang  = langM ? langM[1].toLowerCase() : 'js';
+    // parse attributes: type="shell" section="CONFIG"
+    const attrs = {};
+    const attrRe = /(\w+)=["']([^"']*)["']/g;
+    let   am;
+    while ((am = attrRe.exec(attrsStr)) !== null) attrs[am[1]] = am[2];
 
-  return { code: m[1].trim(), lang, raw: m[0] };
+    const type = attrs.type || 'unknown';
+    if (type === 'shell')  actions.push({ type: 'shell',  script: body,              raw: m[0] });
+    if (type === 'memory') actions.push({ type: 'memory', section: attrs.section || 'CONFIG', content: body, raw: m[0] });
+  }
+  return actions;
 }
 
-function splitAroundAction(text) {
-  const re = /<action\s+type=["']exec["'][^>]*>[\s\S]*?<\/action>/i;
-  const m  = text.match(re);
-  if (!m) return { before: text.trim(), after: '' };
-  const idx = text.indexOf(m[0]);
-  return {
-    before: text.slice(0, idx).trim(),
-    after:  text.slice(idx + m[0].length).trim(),
-  };
+// كل شيء خارج action tags = thinking + final text
+function extractNonActionText(text) {
+  return text.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '').trim();
 }
 
 // ================================================================
-// SECTION 2 — MEMORY UPDATE HANDLER
-// exec code يُعيد { __mem_update__: { section, content } }
-// agent.js هو من يكتب في Firestore — لا firebase-admin في الـ sandbox
+// SECTION 2 — MEMORY ACTION HANDLER
+// يُطبَّق مباشرة في Firestore — بدون shell ولا أي تعقيد
 // ================================================================
-
-async function handleMemUpdate(uid, currentMemory, execResult) {
-  if (!execResult?.success || !execResult?.result?.__mem_update__) {
-    return { changed: false, memory: currentMemory };
-  }
-
-  const { section, content } = execResult.result.__mem_update__;
-  if (!section || content === undefined) {
-    return { changed: false, memory: currentMemory };
-  }
-
+async function applyMemoryAction(uid, currentMemory, section, content) {
   const newMemory = patchMemSection(currentMemory, section, content);
   await saveMemory(uid, newMemory);
-  log('ok', 'agent', `Memory updated — section: ${section}`);
-  return { changed: true, memory: newMemory };
+  log('ok', 'agent', `Memory saved — section: [${section}]`);
+  return newMemory;
 }
 
 // ================================================================
@@ -119,50 +124,58 @@ async function streamThinking(userMsg, soul, onChunk) {
 }
 
 // ================================================================
-// SECTION 4 — MODEL CALL (NO tools param → NO thought_signature)
+// SECTION 4 — MODEL CALL
+// retry مع exponential backoff لحل مشكلة "fetch failed"
 // ================================================================
 
-async function callModel(messages, systemInstruction, useGemma = false) {
-  const model  = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
-  const apiKey = useGemma ? GEMMA_KEY : GEMINI_KEY;
-  const url    = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+async function callModel(messages, systemInstruction, attempt = 0) {
+  // أول محاولة Gemini، بعدها Gemma، بعدها Gemini مرة ثانية
+  const useGemma = attempt === 1;
+  const model    = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
+  const apiKey   = useGemma ? GEMMA_KEY : GEMINI_KEY;
+  const url      = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  // احذف thought parts من الـ history — يمنع thought_signature error
   const clean = messages
     .map(m => ({ role: m.role, parts: (m.parts || []).filter(p => !p.thought) }))
     .filter(m => m.parts.length);
 
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3000_000);
+  const timer = setTimeout(() => ctrl.abort(), 3500_000);
 
   let resp;
   try {
     resp = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
+      body: JSON.stringify({
         contents:          clean,
         systemInstruction: { parts: [{ text: systemInstruction }] },
         generationConfig:  { temperature: 0.3, maxOutputTokens: 2048 },
-        // لا tools → لا thought_signature error
       }),
       signal: ctrl.signal,
     });
   } catch (e) {
     clearTimeout(timer);
-    if (e.name === 'AbortError') throw new Error('AI timeout (30s)');
-    if (!useGemma) { log('warn','agent','Gemini error→Gemma',{e:e.message}); return callModel(messages, systemInstruction, true); }
-    throw e;
+    // fetch failed / network error → retry
+    if (attempt < 3) {
+      const wait = [500, 2000, 5000][attempt] || 5000;
+      log('warn', 'agent', `fetch failed (attempt ${attempt+1}) → retry in ${wait}ms`, { error: e.message });
+      await sleep(wait);
+      return callModel(messages, systemInstruction, attempt + 1);
+    }
+    throw new Error(`AI unreachable after 3 attempts: ${e.message}`);
   }
   clearTimeout(timer);
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    if ((resp.status === 429 || resp.status === 503) && !useGemma) {
-      await sleep(500);
-      return callModel(messages, systemInstruction, true);
+    if ((resp.status === 429 || resp.status === 503) && attempt < 3) {
+      const wait = [1000, 3000, 6000][attempt] || 6000;
+      log('warn', 'agent', `HTTP ${resp.status} → retry in ${wait}ms`);
+      await sleep(wait);
+      return callModel(messages, systemInstruction, attempt + 1);
     }
-    throw new Error(`${useGemma?'Gemma':'Gemini'} ${resp.status}: ${JSON.stringify(err).slice(0,100)}`);
+    throw new Error(`${model} ${resp.status}: ${JSON.stringify(err).slice(0, 100)}`);
   }
 
   const data = await resp.json();
@@ -175,14 +188,11 @@ async function callModel(messages, systemInstruction, useGemma = false) {
 // ================================================================
 
 function buildSystemInstruction(soul, toolsMd, currentMemory) {
-  const now     = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
-  // استخرج الـ JS code blocks من tools.md لحقنها كـ reference
-  const codeRef = extractCodeHeaders(toolsMd);
-
+  const now = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
   return [
     soul,
-    '\n\n---\n## الدوال المتاحة في exec (من tools.md)\n',
-    codeRef,
+    '\n\n---\n## أمثلة Shell (من tools.md)\n',
+    toolsMd,
     '\n\n---\n## الذاكرة الحالية (memory.md)\n```\n',
     currentMemory,
     '\n```',
@@ -190,27 +200,9 @@ function buildSystemInstruction(soul, toolsMd, currentMemory) {
   ].join('');
 }
 
-// استخرج عناوين الدوال فقط (توفيراً للـ tokens)
-function extractCodeHeaders(toolsMd) {
-  const lines = toolsMd.split('\n');
-  const out   = [];
-  let inBlock = false;
-  for (const line of lines) {
-    if (line.startsWith('## '))          { out.push(line); inBlock = false; }
-    else if (line.startsWith('```js'))   { inBlock = true; out.push(line); }
-    else if (line.startsWith('```') && inBlock) { inBlock = false; out.push(line); }
-    else if (inBlock && line.startsWith('function ')) out.push(line); // signature only
-    else if (inBlock && line.startsWith('const ') && line.includes('=>')) out.push(line);
-    else if (inBlock && line.startsWith('async function ')) out.push(line);
-  }
-  return out.join('\n');
-}
-
 // ================================================================
 // SECTION 6 — REACT LOOP
-// دورة ReAct + Plan-and-Solve + Reflexion
 // ================================================================
-
 async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
   let currentMemory = await loadMemory(uid);
 
@@ -225,62 +217,76 @@ async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
   for (let round = 0; round < 8; round++) {
     log('info', 'agent', `ReAct round ${round + 1}/8`);
 
-    // أعد بناء system instruction مع memory الحالي في كل round
     const sysInst = buildSystemInstruction(soul, toolsMd, currentMemory);
     const raw     = await callModel(messages, sysInst);
     log('info', 'agent', `Model (${raw.length}ch)`, { preview: raw.slice(0, 70) });
 
-    const action = parseAction(raw);
-    const parts  = splitAroundAction(raw);
+    const actions  = parseActions(raw);
+    const textOnly = extractNonActionText(raw);
 
-    // النص قبل الـ action → thinking visible للمستخدم
-    if (parts.before) {
-      await appendFirestoreArray(uid, convId, 'thinking_chunks', parts.before);
-      log('info', 'agent', `[think] ${parts.before.slice(0, 60)}`);
+    // إرسال التفكير النصي (خارج الـ actions) للمستخدم
+    if (textOnly) {
+      await appendFirestoreArray(uid, convId, 'thinking_chunks', textOnly);
+      log('info', 'agent', `[think] ${textOnly.slice(0, 60)}`);
     }
 
-    if (!action) {
-      // لا exec → رد نهائي
+    // لا actions → رد نهائي
+    if (!actions.length) {
       finalText = raw.trim();
       messages.push({ role: 'model', parts: [{ text: finalText }] });
       break;
     }
 
-    // ── تنفيذ الكود ──────────────────────────────────────────────
-    log('info', 'agent', `[exec:${action.lang}] ${action.code.length}ch`);
-    await appendFirestoreArray(uid, convId, 'tool_updates', `⚙️ تنفيذ كود ${action.lang}...`);
+    // تنفيذ الـ actions بالترتيب
+    const resultParts = [];
 
-    const execResult = await executeCode(uid, action.code, currentMemory, action.lang);
+    for (const action of actions) {
 
-    if (execResult.success) {
-      await appendFirestoreArray(uid, convId, 'tool_updates', '✅ نجح التنفيذ');
+      // ── shell action ──────────────────────────────────────────
+      if (action.type === 'shell') {
+        log('info', 'agent', `[shell] ${action.script.slice(0, 60)}`);
+        await appendFirestoreArray(uid, convId, 'tool_updates', '⚙️ تنفيذ shell...');
 
-      // FIX: تحقق من __mem_update__ في النتيجة وحدّث memory
-      const memResult = await handleMemUpdate(uid, currentMemory, execResult);
-      if (memResult.changed) {
-        currentMemory = memResult.memory;
-        memUpdated    = true;
-        await appendFirestoreArray(uid, convId, 'tool_updates', '💾 تم تحديث الذاكرة');
+        const result = await executeShell(action.script);
+
+        if (result.success) {
+          await appendFirestoreArray(uid, convId, 'tool_updates', '✅ shell نجح');
+        } else {
+          await appendFirestoreArray(uid, convId, 'tool_updates', `❌ shell: ${result.error?.slice(0, 60)}`);
+        }
+
+        resultParts.push({
+          action:    'shell',
+          success:   result.success,
+          stdout:    result.stdout,
+          stderr:    result.stderr,
+          exit_code: result.exit_code,
+          error:     result.error,
+        });
       }
-    } else {
-      const errMsg = execResult.error?.slice(0, 100) || 'خطأ غير معروف';
-      await appendFirestoreArray(uid, convId, 'tool_updates', `❌ فشل: ${errMsg}`);
-      log('warn', 'agent', `exec failed: ${errMsg}`);
+
+      // ── memory action ─────────────────────────────────────────
+      else if (action.type === 'memory') {
+        log('info', 'agent', `[memory] section=${action.section}`);
+        await appendFirestoreArray(uid, convId, 'tool_updates', `💾 حفظ [${action.section}]...`);
+
+        try {
+          currentMemory = await applyMemoryAction(uid, currentMemory, action.section, action.content);
+          memUpdated    = true;
+          await appendFirestoreArray(uid, convId, 'tool_updates', `✅ تم حفظ [${action.section}]`);
+          resultParts.push({ action: 'memory', section: action.section, success: true });
+        } catch (e) {
+          await appendFirestoreArray(uid, convId, 'tool_updates', `❌ فشل الحفظ: ${e.message.slice(0,60)}`);
+          resultParts.push({ action: 'memory', section: action.section, success: false, error: e.message });
+        }
+      }
     }
 
-    // أضف الرد + النتيجة للـ history
+    // أضف النتائج للـ history وتابع
     messages.push({ role: 'model', parts: [{ text: raw }] });
-
-    // أرسل النتيجة للموديل بدون tokens حساسة
-    const safeResult = JSON.parse(JSON.stringify(execResult));
-    if (safeResult?.result?.__mem_update__) {
-      // لا ترسل المحتوى الكامل للموديل — فقط التأكيد
-      safeResult.result.__mem_update__ = { status: 'saved', section: safeResult.result.__mem_update__.section };
-    }
-
     messages.push({
       role:  'user',
-      parts: [{ text: `نتيجة التنفيذ:\n${JSON.stringify(safeResult, null, 2)}\n\nأكمل ردك للمستخدم بالعربية. لا تكرر tokens أو بيانات حساسة.` }],
+      parts: [{ text: `نتائج التنفيذ:\n${JSON.stringify(resultParts, null, 2)}\n\nالذاكرة الحالية محدَّثة.\nأكمل ردك للمستخدم بالعربية بإيجاز. لا تكرر tokens أو بيانات حساسة.` }],
     });
   }
 
