@@ -55,20 +55,14 @@ export function cairoDate() {
 // FIREBASE — MEMORY + MD DOCS
 // ================================================================
 
-// Firebase Service Account — مؤقت للتطوير، انقله لـ GitHub Secret لاحقاً
+// ← Firebase Service Account — مؤقت للتطوير، انقله لـ GitHub Secret لاحقاً
 const FIREBASE_SA_HARDCODED = process.env.FIREBASE_SERVICE_ACCOUNT || JSON.stringify({
-  "type": "service_account",
-  "project_id": "ofoqagent",
-  "private_key_id": "bbcba2ec33d0799062dec414b90bf5dc81f95c30",
-  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCzyOW9G5urP80f\nB+5+b1UM0n8X6vwvZ7jZEEQXhm3jpDGyC2Su0ornvFTlPpwYmDY9eoA5vkn0/Cs0\nqoYFOcYdT3rlnrVZ0HD4USsqcsG1futmtOMeIwBByT2CSHPxYf1P738ccfqg7NmX\nylad10Xj0pB0KO/8KeoaHcY5bYMiy+yZvKCzdQoCbZAXWAbe1g6NRGPkIi2c+Pp3\nCZtI6t3QGK9Pn8zreEDd2Spbwid4IFgw0uqdavroIPtI8SxlpJPhhQED3j+ZR1r7\nTgO4v8uvZAhnuHiC/oD8LG8PEZxrTumBhyusoglUXkHK6ctdXLZM2MVYR8fP0QLq\njAUicjdTAgMBAAECggEAK8RsHWoDryB0nKnPJyuOTnVOKHH128qJ5xn9IacByInX\n6Uq5w4+Q7lJcboSb9qbTiYrxfV00XvYmxIcA4nPKpacMOas15fwHDISiGA7g1oDj\n6Nh/c/48WUeW+EkQJMLgqp2Y2cFrrNKMNFY3WOyn4IsJzKWMqtw/WAVIlQFyi70l\nz9MFfffkPZVMEK1gfTb+MMONTqywpAHpIxt78QtukBuBumfFVdktVdoWJRPcmTi5\nnkXWcWoqyM4s2zaAi25NUOb180VBKboDzpMxUmywaj/WXovpYUF8wlB+iMGDQ0Xa\nIsvXl+tcRDQoNeoHy5bWLaXX0F781q1wA58Zb5TT5QKBgQDaCM0Pc/2kwdqcpemv\nL+5tijZ8G1R3PWFxsXd+5mau+r/z2Oy8fEEQ9FncGycU+ANpc0PabDjYh2yxjpBJ\nevepOsKo+wOwqLl4FbGUJZZE5sKXJpRO2BI+g6puNn2GEiVDrEtHCVkSPmOvkXVw\n2zWskipQK2JAtLKMh+ylxiY1vwKBgQDTFxBcDH3FMo68kUQ4Viw5vPaO0NWeKlf7\ntNExiFJmT34rW/m5rH5e4p1ub/C0eMJJDaa8MHKstSMSjIW3Cn8UC7zmFTShrmc9\naKv6SZW1bemhOYf3vz0hH4G1ecWo899wLpeo63mcz+aWdZbz3NMAtCy0kXc8GRW0\n26MJuunrbQKBgC+79YkIj+NePYpGGJ8uEzkQJVWOdjOU0JyfidXSg3CTnSq5tzqc\nyXH4zSOPHkNM+RJBFf3f66IcJAPLfnNX5Ji8MJnmOqyWg+Rye2o/wGJdUwTcgWOx\nkmz1Tn7KlzifCGGEewaWWVXRKunpIpkOpPWfGnxqwxv/c4eoynqQoxTpAoGAYqnd\nE6kjABDpdmnPoSVl9nbEJ2yk7BCOny+ct7IoEXoGVu3eg1KEnoT9YKkhsLjg1pRy\n4nMipmbjxb+4oB1f2FbELCatOwTxbFqIR6wtNWfyU1E4pCvWvqyjS9dm89lJDn44\nlNO7O/hQpvK/Y6xLU4DjhGKZgJWY97fRNLMQsuECgYEAtBpfMfzTxakkI1q1pfXO\nLBmpeyC+fntNvVICxiLhNrgbTcsouoJC0Xb5rbLSt+A96uMKr0P1wyqstSpHLXCO\nWYPlFSSVPNkS791zeDPtePHi3KBkUg7GkoObXeaI/+yMxLqnBEVMIWmZaaito/s4\n1a2XnedbOC93Jaoe+q4LzPM=\n-----END PRIVATE KEY-----\n",
-  "client_email": "firebase-adminsdk-fbsvc@ofoqagent.iam.gserviceaccount.com",
-  "client_id": "106152864292741730046",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40ofoqagent.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
+  // ضع هنا محتوى ملف serviceAccount.json مؤقتاً
+  // مثال: "type": "service_account", "project_id": "...", ...
+  // استبدله بـ FIREBASE_SERVICE_ACCOUNT secret في الإنتاج
+  _placeholder: true,
 });
+
 let _db = null;
 
 async function getDb() {
@@ -208,166 +202,47 @@ export async function readUploadedFile(uid, fileId) {
 }
 
 // ================================================================
-// CODE EXECUTION SANDBOX
+// SHELL EXECUTION
 // ────────────────────────────────────────────────────────────────
-// الإصلاحات المطبّقة:
-//   1. cwd: PROJECT_DIR  → node_modules موجودة
-//   2. NODE_PATH         → يحل مشكلة firebase-admin import
-//   3. __mem_update__    → exec لا يستورد firebase — agent يحفظ
-//   4. دعم Python         → lang="py"
-//   5. fetch محسّن       → User-Agent + AbortSignal.timeout
-//   6. helper functions  → تُحقَن من tools.md تلقائياً
+// GitHub Actions = Ubuntu VM كامل
+// AI يكتب bash script → يشتغل مباشرة مع كامل صلاحيات الـ runner
+// curl / wget / git / npm / python3 / apt-get / أي أمر Ubuntu
 // ================================================================
-export async function executeCode(uid, code, currentMemory, lang = 'js') {
-  const id = `ofoq_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+export async function executeShell(script) {
+  const id      = `ofoq_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+  const tmpFile = join(tmpdir(), `${id}.sh`);
 
-  if (lang === 'py') {
-    return executePython(id, code);
-  }
-
-  return executeJS(uid, id, code, currentMemory);
-}
-
-// ── JavaScript Execution ──────────────────────────────────────────
-// FIX: استخدم .cjs (CommonJS) بدل .mjs (ES Module)
-// في CommonJS، كل الكود يُلفّ تلقائياً في function بواسطة Node.js
-// لذا return statement قانوني على أي مستوى
-async function executeJS(uid, id, code, currentMemory) {
-  const tmpFile = join(tmpdir(), `${id}.cjs`); // ← .cjs بدل .mjs
-
-  const toolsMd   = readMd('tools.md');
-  const helpersFn = extractJsBlocks(toolsMd);
-
-  const escapedMem = JSON.stringify(currentMemory);
-  const escapedUid = JSON.stringify(uid);
-
-  // CommonJS wrapper — return صح على أي مستوى
-  const wrapper = `'use strict';
-const __mem = ${escapedMem};
-const __uid = ${escapedUid};
-
-// ── fetch محسّن مع User-Agent ──────────────────────────────────
-const _origFetch = globalThis.fetch;
-globalThis.fetch = (url, opts = {}) => {
-  return _origFetch(url, {
-    ...opts,
-    headers: { 'User-Agent': 'OFOQ-Agent/6.0', ...(opts.headers || {}) },
-  });
-};
-
-// ── Helper Functions من tools.md ──────────────────────────────
-${helpersFn}
-
-// ── كود الـ AI ─────────────────────────────────────────────────
-async function __run__() {
-${code}
-}
-
-__run__()
-  .then(r => {
-    if (r !== undefined) {
-      console.log('__RESULT__:' + JSON.stringify(r));
-    }
-  })
-  .catch(e => {
-    console.error('__ERROR__:' + e.message);
-    process.exit(1);
-  });
-`;
-
-  writeFileSync(tmpFile, wrapper, 'utf8');
+  // كتابة الـ script مع set -e (يوقف عند أي خطأ)
+  writeFileSync(tmpFile, `#!/bin/bash\nset -eo pipefail\n\n${script}\n`, 'utf8');
 
   let stdout = '', stderr = '';
   try {
-    stdout = execSync(`node "${tmpFile}"`, {
-      timeout:   30_000,
-      maxBuffer: 1024 * 512,
+    stdout = execSync(`bash "${tmpFile}"`, {
+      timeout:   55_000,          // 55s — GitHub Actions job timeout 10min
+      maxBuffer: 1024 * 1024,     // 1MB output
       encoding:  'utf8',
       cwd:       PROJECT_DIR,
-      env: {
-        ...process.env,
-        NODE_PATH: join(PROJECT_DIR, 'node_modules'),
-      },
+      env: { ...process.env, TERM: 'xterm-256color' },
     });
   } catch (e) {
-    stderr = (e.stdout || '') + (e.stderr || e.message || '');
+    // execSync throws on non-zero exit
+    stderr = (e.stderr || '') + (e.stdout || '') + (e.message || '');
     if (e.stdout) stdout = e.stdout;
-  } finally {
-    try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
-  }
-
-  return parseExecOutput(stdout, stderr);
-}
-
-// ── Python Execution ──────────────────────────────────────────────
-async function executePython(id, code) {
-  const tmpFile = join(tmpdir(), `${id}.py`);
-
-  const wrapper = `
-import json, sys
-
-def __get_result__():
-${code.split('\n').map(l => '    ' + l).join('\n')}
-
-try:
-    result = __get_result__()
-    if result is not None:
-        print('__RESULT__:' + json.dumps(result, ensure_ascii=False))
-except Exception as e:
-    print('__ERROR__:' + str(e))
-    sys.exit(1)
-`;
-
-  writeFileSync(tmpFile, wrapper, 'utf8');
-
-  let stdout = '', stderr = '';
-  try {
-    stdout = execSync(`python3 "${tmpFile}"`, {
-      timeout:   30_000,
-      maxBuffer: 1024 * 512,
-      encoding:  'utf8',
-    });
-  } catch (e) {
-    stderr = e.stdout || e.stderr || e.message || '';
-    if (e.stdout) stdout = e.stdout;
-  } finally {
-    try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
-  }
-
-  return parseExecOutput(stdout, stderr);
-}
-
-// ── Parse exec output ─────────────────────────────────────────────
-function parseExecOutput(stdout, stderr) {
-  const combined    = stdout + stderr;
-  const resultLine  = combined.split('\n').find(l => l.startsWith('__RESULT__:'));
-  const errorLine   = combined.split('\n').find(l => l.startsWith('__ERROR__:'));
-  const cleanOutput = combined.replace(/__RESULT__:.*|__ERROR__:.*/g, '').trim().slice(0, 2000);
-
-  if (errorLine) {
     return {
-      success: false,
-      error:   errorLine.replace('__ERROR__:', '').trim(),
-      output:  cleanOutput,
+      success:   false,
+      exit_code: e.status || 1,
+      stdout:    stdout.slice(0, 3000),
+      stderr:    stderr.slice(0, 1000),
+      error:     stderr.split('\n').filter(Boolean).slice(-3).join(' | '),
     };
+  } finally {
+    try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
   }
 
-  let result = null;
-  if (resultLine) {
-    try   { result = JSON.parse(resultLine.replace('__RESULT__:', '')); }
-    catch { result = resultLine.replace('__RESULT__:', '').trim(); }
-  }
-
-  return { success: true, result, output: cleanOutput };
-}
-
-// استخرج كتل ```js من tools.md
-function extractJsBlocks(mdText) {
-  const blocks = [];
-  const re = /```js\n([\s\S]*?)```/g;
-  let m;
-  while ((m = re.exec(mdText)) !== null) {
-    blocks.push(m[1]);
-  }
-  return blocks.join('\n\n');
+  return {
+    success:   true,
+    exit_code: 0,
+    stdout:    stdout.slice(0, 3000),
+    stderr:    '',
+  };
 }
