@@ -1,13 +1,17 @@
 // agent.js — OFOQ Agent v6.0
 // العقل المدبر — ReAct + Plan-and-Solve + Reflexion
-// memory.js مدمج هنا عبر tools.js
+//
+// Actions المدعومة:
+//   <action type="shell">bash script</action>
+//   <action type="update_memory">memory.md كامل</action>
+//
+// Memory: يُحمَّل مع كل رسالة بغض النظر عن الـ conversation
+// Conversations: history كامل في Firestore per-user per-conversation
 
 import {
-  log, sleep, readMd,
-  loadMemory, saveMemory, patchMemSection, getMemVal,
-  loadMdDoc, saveMdDoc,
-  saveConv, updateConv, getConv,
-  appendFirestoreArray,
+  log, sleep, readSkill,
+  loadMemory, saveMemory, getMemVal,
+  createConv, getConv, updateConv, saveConv, appendToConv,
   executeShell,
 } from './tools.js';
 
@@ -24,80 +28,48 @@ if (!CONV_ID)    { console.error('❌ CONV_ID missing');         process.exit(1)
 // ================================================================
 // SECTION 1 — ACTION PARSER
 //
-// صيغتان فقط:
+// صيغتان:
+//   <action type="shell">bash commands</action>
+//   <action type="update_memory">memory.md كامل من أوله لآخره</action>
 //
-//   <action type="shell">
-//   bash commands here
-//   </action>
-//
-//   <action type="memory" section="CONFIG">
-//   github_token: ghp_xxx
-//   github_status: verified
-//   </action>
-//
-// النص خارج الـ actions = تفكير / رد نهائي
+// النص خارج الـ actions = تفكير مرئي أو رد نهائي
 // ================================================================
 
 function parseActions(text) {
   const actions = [];
-  // استخرج كل <action ...>...</action> مرتبة حسب الظهور
   const re = /<action\s+([^>]*)>([\s\S]*?)<\/action>/gi;
-  let   m;
+  let m;
   while ((m = re.exec(text)) !== null) {
-    const attrsStr = m[1];
-    const body     = m[2].trim();
-
-    // parse attributes: type="shell" section="CONFIG"
+    const attrsStr = m[1], body = m[2].trim();
     const attrs = {};
-    const attrRe = /(\w+)=["']([^"']*)["']/g;
-    let   am;
-    while ((am = attrRe.exec(attrsStr)) !== null) attrs[am[1]] = am[2];
-
-    const type = attrs.type || 'unknown';
-    if (type === 'shell')  actions.push({ type: 'shell',  script: body,              raw: m[0] });
-    if (type === 'memory') actions.push({ type: 'memory', section: attrs.section || 'CONFIG', content: body, raw: m[0] });
+    const ar = /(\w+)=["']([^"']*)["']/g; let am;
+    while ((am = ar.exec(attrsStr)) !== null) attrs[am[1]] = am[2];
+    const type = (attrs.type || '').toLowerCase();
+    if (type === 'shell')         actions.push({ type: 'shell',         script:  body, raw: m[0] });
+    if (type === 'update_memory') actions.push({ type: 'update_memory', content: body, raw: m[0] });
   }
   return actions;
 }
 
-// كل شيء خارج action tags = thinking + final text
-function extractNonActionText(text) {
+// كل شيء خارج action tags
+function extractText(text) {
   return text.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '').trim();
 }
 
 // ================================================================
-// SECTION 2 — MEMORY ACTION HANDLER
-// يُطبَّق مباشرة في Firestore — بدون shell ولا أي تعقيد
+// SECTION 2 — THINKING PASS (SSE بدون tools → thinkingConfig يعمل)
 // ================================================================
-async function applyMemoryAction(uid, currentMemory, section, content) {
-  const newMemory = patchMemSection(currentMemory, section, content);
-  await saveMemory(uid, newMemory);
-  log('ok', 'agent', `Memory saved — section: [${section}]`);
-  return newMemory;
-}
-
-// ================================================================
-// SECTION 3 — THINKING PASS (SSE بدون tools → thinkingConfig يعمل)
-// ================================================================
-
 async function streamThinking(userMsg, soul, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
-  const body = {
-    contents:          [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 300)}` }] }],
-    systemInstruction: { parts: [{ text: soul.slice(0, 1000) }] },
-    generationConfig:  {
-      temperature:    0.5,
-      maxOutputTokens: 500,
-      thinkingConfig: { thinkingBudget: 400 },
-      // NO tools → thinkingConfig يعمل تماماً
-    },
-  };
-
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
   try {
     const resp = await fetch(url, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(body),
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 300)}` }] }],
+        systemInstruction: { parts: [{ text: soul.slice(0, 1000) }] },
+        generationConfig: { temperature: 0.5, maxOutputTokens: 500, thinkingConfig: { thinkingBudget: 400 } },
+      }),
     });
     if (!resp.ok) return;
     const reader = resp.body.getReader(), dec = new TextDecoder();
@@ -124,42 +96,40 @@ async function streamThinking(userMsg, soul, onChunk) {
 }
 
 // ================================================================
-// SECTION 4 — MODEL CALL
-// retry مع exponential backoff لحل مشكلة "fetch failed"
+// SECTION 3 — MODEL CALL
+// retry مع exponential backoff
 // ================================================================
-
 async function callModel(messages, systemInstruction, attempt = 0) {
-  // أول محاولة Gemini، بعدها Gemma، بعدها Gemini مرة ثانية
   const useGemma = attempt === 1;
-  const model    = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
+  const model    = useGemma ? 'gemma-3-27b-it' : 'gemini-2.5-flash-preview-04-17';
   const apiKey   = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url      = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
+  // حذف thought parts — يمنع thought_signature error
   const clean = messages
     .map(m => ({ role: m.role, parts: (m.parts || []).filter(p => !p.thought) }))
     .filter(m => m.parts.length);
 
   const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3500_000);
+  const timer = setTimeout(() => ctrl.abort(), 35_000);
 
   let resp;
   try {
     resp = await fetch(url, {
-      method:  'POST',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents:          clean,
+        contents: clean,
         systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig:  { temperature: 0.3, maxOutputTokens: 2048 },
+        generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
       }),
       signal: ctrl.signal,
     });
   } catch (e) {
     clearTimeout(timer);
-    // fetch failed / network error → retry
     if (attempt < 3) {
       const wait = [500, 2000, 5000][attempt] || 5000;
-      log('warn', 'agent', `fetch failed (attempt ${attempt+1}) → retry in ${wait}ms`, { error: e.message });
+      log('warn', 'agent', `fetch failed (attempt ${attempt+1}) → retry ${wait}ms`, { error: e.message });
       await sleep(wait);
       return callModel(messages, systemInstruction, attempt + 1);
     }
@@ -171,7 +141,7 @@ async function callModel(messages, systemInstruction, attempt = 0) {
     const err = await resp.json().catch(() => ({}));
     if ((resp.status === 429 || resp.status === 503) && attempt < 3) {
       const wait = [1000, 3000, 6000][attempt] || 6000;
-      log('warn', 'agent', `HTTP ${resp.status} → retry in ${wait}ms`);
+      log('warn', 'agent', `HTTP ${resp.status} → retry ${wait}ms`);
       await sleep(wait);
       return callModel(messages, systemInstruction, attempt + 1);
     }
@@ -183,17 +153,17 @@ async function callModel(messages, systemInstruction, attempt = 0) {
 }
 
 // ================================================================
-// SECTION 5 — SYSTEM INSTRUCTION BUILDER
-// يدمج soul.md + tools.md (helper functions فقط) + memory.md الحالي
+// SECTION 4 — SYSTEM INSTRUCTION BUILDER
+// يدمج soul.md + tools.md + memory.md الحالي للمستخدم
+// يُعاد بناؤه في كل round مع أحدث نسخة من memory
 // ================================================================
-
 function buildSystemInstruction(soul, toolsMd, currentMemory) {
   const now = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
   return [
     soul,
-    '\n\n---\n## أمثلة Shell (من tools.md)\n',
+    '\n\n---\n## Shell Examples (skills/tools.md)\n',
     toolsMd,
-    '\n\n---\n## الذاكرة الحالية (memory.md)\n```\n',
+    '\n\n---\n## ذاكرتك الحالية (memory.md)\n```\n',
     currentMemory,
     '\n```',
     `\n\n**الوقت:** ${now}`,
@@ -201,92 +171,81 @@ function buildSystemInstruction(soul, toolsMd, currentMemory) {
 }
 
 // ================================================================
-// SECTION 6 — REACT LOOP
+// SECTION 5 — REACT LOOP
 // ================================================================
 async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
+  // تحميل memory.md مع كل رسالة — مصدر الحقيقة الوحيد
   let currentMemory = await loadMemory(uid);
+  let memUpdated    = false;
 
+  // بناء Gemini messages من history
   const messages = history
     .filter(m => m.content)
     .map(m => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] }));
   messages.push({ role: 'user', parts: [{ text: userMsg }] });
 
-  let finalText  = '';
-  let memUpdated = false;
+  let finalText = '';
 
   for (let round = 0; round < 8; round++) {
     log('info', 'agent', `ReAct round ${round + 1}/8`);
 
+    // أعد بناء sysInstruction في كل round مع أحدث memory
     const sysInst = buildSystemInstruction(soul, toolsMd, currentMemory);
     const raw     = await callModel(messages, sysInst);
     log('info', 'agent', `Model (${raw.length}ch)`, { preview: raw.slice(0, 70) });
 
     const actions  = parseActions(raw);
-    const textOnly = extractNonActionText(raw);
+    const textOnly = extractText(raw);
 
-    // إرسال التفكير النصي (خارج الـ actions) للمستخدم
+    // النص خارج الـ actions → thinking chunks (مرئي للمستخدم live)
     if (textOnly) {
-      await appendFirestoreArray(uid, convId, 'thinking_chunks', textOnly);
+      await appendToConv(uid, convId, 'thinking_chunks', textOnly);
       log('info', 'agent', `[think] ${textOnly.slice(0, 60)}`);
     }
 
-    // لا actions → رد نهائي
+    // لا actions = رد نهائي
     if (!actions.length) {
       finalText = raw.trim();
       messages.push({ role: 'model', parts: [{ text: finalText }] });
       break;
     }
 
-    // تنفيذ الـ actions بالترتيب
     const resultParts = [];
 
     for (const action of actions) {
-
-      // ── shell action ──────────────────────────────────────────
+      // ── shell ────────────────────────────────────────────────────
       if (action.type === 'shell') {
         log('info', 'agent', `[shell] ${action.script.slice(0, 60)}`);
-        await appendFirestoreArray(uid, convId, 'tool_updates', '⚙️ تنفيذ shell...');
-
+        await appendToConv(uid, convId, 'tool_updates', '⚙️ shell...');
         const result = await executeShell(action.script);
-
-        if (result.success) {
-          await appendFirestoreArray(uid, convId, 'tool_updates', '✅ shell نجح');
-        } else {
-          await appendFirestoreArray(uid, convId, 'tool_updates', `❌ shell: ${result.error?.slice(0, 60)}`);
-        }
-
-        resultParts.push({
-          action:    'shell',
-          success:   result.success,
-          stdout:    result.stdout,
-          stderr:    result.stderr,
-          exit_code: result.exit_code,
-          error:     result.error,
-        });
+        const label  = result.success ? '✅ shell نجح' : `❌ shell: ${result.error?.slice(0,60)}`;
+        await appendToConv(uid, convId, 'tool_updates', label);
+        resultParts.push({ type: 'shell', success: result.success, stdout: result.stdout, stderr: result.stderr, error: result.error });
       }
 
-      // ── memory action ─────────────────────────────────────────
-      else if (action.type === 'memory') {
-        log('info', 'agent', `[memory] section=${action.section}`);
-        await appendFirestoreArray(uid, convId, 'tool_updates', `💾 حفظ [${action.section}]...`);
-
+      // ── update_memory ────────────────────────────────────────────
+      // AI يكتب ملف memory.md كاملاً من أوله لآخره
+      else if (action.type === 'update_memory') {
+        log('info', 'agent', `[update_memory] ${action.content.length}ch`);
+        await appendToConv(uid, convId, 'tool_updates', '💾 تحديث الذاكرة...');
         try {
-          currentMemory = await applyMemoryAction(uid, currentMemory, action.section, action.content);
+          await saveMemory(uid, action.content);
+          currentMemory = action.content;  // استخدم النسخة الجديدة مباشرة
           memUpdated    = true;
-          await appendFirestoreArray(uid, convId, 'tool_updates', `✅ تم حفظ [${action.section}]`);
-          resultParts.push({ action: 'memory', section: action.section, success: true });
+          await appendToConv(uid, convId, 'tool_updates', '✅ تم تحديث memory.md');
+          resultParts.push({ type: 'update_memory', success: true, size: action.content.length });
         } catch (e) {
-          await appendFirestoreArray(uid, convId, 'tool_updates', `❌ فشل الحفظ: ${e.message.slice(0,60)}`);
-          resultParts.push({ action: 'memory', section: action.section, success: false, error: e.message });
+          await appendToConv(uid, convId, 'tool_updates', `❌ فشل الحفظ: ${e.message.slice(0, 60)}`);
+          resultParts.push({ type: 'update_memory', success: false, error: e.message });
         }
       }
     }
 
-    // أضف النتائج للـ history وتابع
-    messages.push({ role: 'model', parts: [{ text: raw }] });
+    // أضف النتائج للـ conversation
+    messages.push({ role: 'model',  parts: [{ text: raw }] });
     messages.push({
       role:  'user',
-      parts: [{ text: `نتائج التنفيذ:\n${JSON.stringify(resultParts, null, 2)}\n\nالذاكرة الحالية محدَّثة.\nأكمل ردك للمستخدم بالعربية بإيجاز. لا تكرر tokens أو بيانات حساسة.` }],
+      parts: [{ text: `نتائج:\n${JSON.stringify(resultParts, null, 2)}\n\nأكمل ردك للمستخدم بالعربية بإيجاز. لا تكرر tokens.` }],
     });
   }
 
@@ -304,34 +263,30 @@ async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
 }
 
 // ================================================================
-// SECTION 7 — MAIN
+// SECTION 6 — MAIN
 // ================================================================
-
 async function main() {
   log('info', 'agent', `Starting — uid=${UID?.slice(0,8)} conv=${CONV_ID}`);
 
+  // soul.md و tools.md من skills/ محلياً فقط — لا Firestore
+  const soul    = readSkill('soul.md');
+  const toolsMd = readSkill('tools.md');
+  if (!soul) { log('error', 'agent', 'skills/soul.md not found'); process.exit(1); }
+
+  // تحديث status → running
   await updateConv(UID, CONV_ID, { status: 'running' });
 
+  // تحميل الـ conversation (اللي أنشأه الـ frontend)
   const conv = await getConv(UID, CONV_ID);
-  if (!conv) { log('error','agent','Conversation not found'); process.exit(1); }
+  if (!conv) { log('error', 'agent', 'Conversation not found in Firestore'); process.exit(1); }
 
   const userMsg = conv.user_message;
   const history = conv.history || [];
 
-  // تحميل MD files من Firestore per-uid
-  // أول مرة: يُنسَخ من الملف المحلي ويُحفَظ في Firestore
-  // المستخدم يستطيع تعديلها لاحقاً عبر الـ AI
-  const [soul, toolsMd] = await Promise.all([
-    loadMdDoc(UID, 'soul'),
-    loadMdDoc(UID, 'tools'),
-  ]);
-
-  if (!soul) { log('error','agent','soul.md not found — check md/ folder'); process.exit(1); }
-
-  // Thinking pass
+  // Thinking pass — SSE chunks → Firestore thinking_chunks
   await updateConv(UID, CONV_ID, { status: 'thinking' });
   await streamThinking(userMsg, soul, async (chunk) => {
-    await appendFirestoreArray(UID, CONV_ID, 'thinking_chunks', chunk);
+    await appendToConv(UID, CONV_ID, 'thinking_chunks', chunk);
   });
 
   // ReAct loop
@@ -340,14 +295,15 @@ async function main() {
     UID, CONV_ID, userMsg, history, soul, toolsMd,
   );
 
+  // حفظ الرد النهائي + history كامل
   await saveConv(UID, CONV_ID, {
     status:         'done',
     final_response: finalText,
-    history:        updatedHistory,
+    history:        updatedHistory,  // history كامل محفوظ في Firestore
     finished_at:    new Date().toISOString(),
   });
 
-  log('ok', 'agent', `Done — memUpdated=${memUpdated}`);
+  log('ok', 'agent', `Done — memUpdated=${memUpdated} history=${updatedHistory.length} msgs`);
 }
 
 main().catch(async (e) => {
