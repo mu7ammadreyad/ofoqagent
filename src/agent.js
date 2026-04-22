@@ -60,7 +60,7 @@ function extractText(text) {
 // SECTION 2 — THINKING PASS (SSE بدون tools → thinkingConfig يعمل)
 // ================================================================
 async function streamThinking(userMsg, soul, onChunk) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-04-17:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
   try {
     const resp = await fetch(url, {
       method: 'POST',
@@ -101,7 +101,7 @@ async function streamThinking(userMsg, soul, onChunk) {
 // ================================================================
 async function callModel(messages, systemInstruction, attempt = 0) {
   const useGemma = attempt === 1;
-  const model    = useGemma ? 'gemma-3-27b-it' : 'gemini-2.5-flash-preview-04-17';
+  const model    = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
   const apiKey   = useGemma ? GEMMA_KEY : GEMINI_KEY;
   const url      = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
