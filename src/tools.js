@@ -203,7 +203,8 @@ export async function executeShell(script) {
   let stdout = '', stderr = '';
   try {
     stdout = execSync(`bash "${tmpFile}"`, {
-      maxBuffer: 10 * 1024 * 1024,  // 10MB output
+      timeout:   0,               // لا timeout — المهمة تكتمل مهما طالت
+      maxBuffer: 10 * 1024 * 1024, // 10MB output
       encoding:  'utf8',
       cwd:       PROJECT_DIR,
       env: { ...process.env, TERM: 'xterm-256color' },

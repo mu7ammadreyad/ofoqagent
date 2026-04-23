@@ -1,5 +1,5 @@
 // agent.js — OFOQ Agent v6.0
-// العقل المدبر — ReAct + Plan-and-Solve + Reflexion
+// عميل ذكاء اصطناعي متكامل — يقدر يعمل أي حاجة
 //
 // Actions المدعومة:
 //   <action type="shell">bash script</action>
@@ -10,14 +10,13 @@
 
 import {
   log, sleep, readSkill,
-  loadMemory, saveMemory, getMemVal,
-  createConv, getConv, updateConv, saveConv, appendToConv,
+  loadMemory, saveMemory,
+  getConv, updateConv, saveConv, appendToConv,
   executeShell,
 } from './tools.js';
 
 // ── Env ───────────────────────────────────────────────────────────
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
-const GEMMA_KEY  = process.env.GEMMA_API_KEY || GEMINI_KEY;
 const UID        = process.env.CONV_UID;
 const CONV_ID    = process.env.CONV_ID;
 
@@ -27,14 +26,7 @@ if (!CONV_ID)    { console.error('❌ CONV_ID missing');         process.exit(1)
 
 // ================================================================
 // SECTION 1 — ACTION PARSER
-//
-// صيغتان:
-//   <action type="shell">bash commands</action>
-//   <action type="update_memory">memory.md كامل من أوله لآخره</action>
-//
-// النص خارج الـ actions = تفكير مرئي أو رد نهائي
 // ================================================================
-
 function parseActions(text) {
   const actions = [];
   const re = /<action\s+([^>]*)>([\s\S]*?)<\/action>/gi;
@@ -51,13 +43,12 @@ function parseActions(text) {
   return actions;
 }
 
-// كل شيء خارج action tags
 function extractText(text) {
   return text.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '').trim();
 }
 
 // ================================================================
-// SECTION 2 — THINKING PASS (SSE بدون tools → thinkingConfig يعمل)
+// SECTION 2 — THINKING PASS (SSE)
 // ================================================================
 async function streamThinking(userMsg, soul, onChunk) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:streamGenerateContent?alt=sse&key=${GEMINI_KEY}`;
@@ -66,9 +57,9 @@ async function streamThinking(userMsg, soul, onChunk) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 300)}` }] }],
-        systemInstruction: { parts: [{ text: soul.slice(0, 1000) }] },
-        generationConfig: { temperature: 0.5, maxOutputTokens: 500, thinkingConfig: { thinkingBudget: 400 } },
+        contents: [{ role: 'user', parts: [{ text: `فكّر باختصار: ${userMsg.slice(0, 400)}` }] }],
+        systemInstruction: { parts: [{ text: soul.slice(0, 1500) }] },
+        generationConfig: { temperature: 0.5, maxOutputTokens: 600, thinkingConfig: { thinkingBudget: 500 } },
       }),
     });
     if (!resp.ok) return;
@@ -96,14 +87,11 @@ async function streamThinking(userMsg, soul, onChunk) {
 }
 
 // ================================================================
-// SECTION 3 — MODEL CALL
-// retry مع exponential backoff
+// SECTION 3 — MODEL CALL (بدون timeout — المهمة تكتمل مهما طالت)
 // ================================================================
 async function callModel(messages, systemInstruction, attempt = 0) {
-  const useGemma = attempt === 1;
-  const model    = useGemma ? 'gemma-4-26b-a4b-it' : 'gemma-4-26b-a4b-it';
-  const apiKey   = useGemma ? GEMMA_KEY : GEMINI_KEY;
-  const url      = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const model  = 'gemma-4-26b-a4b-it';
+  const url    = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
 
   // حذف thought parts — يمنع thought_signature error
   const clean = messages
@@ -118,28 +106,33 @@ async function callModel(messages, systemInstruction, attempt = 0) {
       body: JSON.stringify({
         contents: clean,
         systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
+        generationConfig: {
+          temperature:    0.35,
+          maxOutputTokens: 4096,
+          topP: 0.95,
+        },
       }),
+      // لا AbortController — لا timeout — المهمة تكتمل مهما طالت
     });
   } catch (e) {
-    if (attempt < 5) {
-      const wait = [500, 2000, 5000, 10000, 20000][attempt] || 20000;
+    if (attempt < 4) {
+      const wait = [1000, 3000, 6000, 12000][attempt] || 12000;
       log('warn', 'agent', `fetch failed (attempt ${attempt+1}) → retry ${wait}ms`, { error: e.message });
       await sleep(wait);
       return callModel(messages, systemInstruction, attempt + 1);
     }
-    throw new Error(`AI unreachable after 5 attempts: ${e.message}`);
+    throw new Error(`AI unreachable after 4 attempts: ${e.message}`);
   }
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    if ((resp.status === 429 || resp.status === 503) && attempt < 5) {
-      const wait = [1000, 3000, 6000, 12000, 24000][attempt] || 24000;
+    if ((resp.status === 429 || resp.status === 503) && attempt < 4) {
+      const wait = [2000, 5000, 10000, 20000][attempt] || 20000;
       log('warn', 'agent', `HTTP ${resp.status} → retry ${wait}ms`);
       await sleep(wait);
       return callModel(messages, systemInstruction, attempt + 1);
     }
-    throw new Error(`${model} ${resp.status}: ${JSON.stringify(err).slice(0, 100)}`);
+    throw new Error(`${model} ${resp.status}: ${JSON.stringify(err).slice(0, 150)}`);
   }
 
   const data = await resp.json();
@@ -148,53 +141,56 @@ async function callModel(messages, systemInstruction, attempt = 0) {
 
 // ================================================================
 // SECTION 4 — SYSTEM INSTRUCTION BUILDER
-// يدمج soul.md + tools.md + memory.md الحالي للمستخدم
+// يدمج soul.md + tools.md + memory.md الحالي
 // يُعاد بناؤه في كل round مع أحدث نسخة من memory
 // ================================================================
 function buildSystemInstruction(soul, toolsMd, currentMemory) {
   const now = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
   return [
     soul,
-    '\n\n---\n## Shell Examples (skills/tools.md)\n',
+    '\n\n---\n## مرجع الأدوات (skills/tools.md)\n',
     toolsMd,
     '\n\n---\n## ذاكرتك الحالية (memory.md)\n```\n',
     currentMemory,
     '\n```',
-    `\n\n**الوقت:** ${now}`,
+    `\n\n**الوقت الحالي:** ${now}`,
+    '\n\n**تعليمات إضافية:**',
+    '\n- استخدم actions مباشرة بدون شرح مطوّل قبلها',
+    '\n- بعد كل shell — اقرأ النتيجة وقرر الخطوة التالية',
+    '\n- اكتب ردودك النهائية بالعربية المصرية البسيطة',
+    '\n- لا تكرر البيانات الحساسة (tokens) في الرد النهائي',
   ].join('');
 }
 
 // ================================================================
-// SECTION 5 — REACT LOOP
+// SECTION 5 — REACT LOOP (حد أقصى 15 جولة للمهام الطويلة)
 // ================================================================
 async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
-  // تحميل memory.md مع كل رسالة — مصدر الحقيقة الوحيد
   let currentMemory = await loadMemory(uid);
   let memUpdated    = false;
 
-  // بناء Gemini messages من history
   const messages = history
     .filter(m => m.content)
     .map(m => ({ role: m.role === 'user' ? 'user' : 'model', parts: [{ text: m.content }] }));
   messages.push({ role: 'user', parts: [{ text: userMsg }] });
 
   let finalText = '';
+  const MAX_ROUNDS = 15;  // زيادة الحد للمهام الطويلة
 
-  for (let round = 0; round < 15; round++) {
-    log('info', 'agent', `ReAct round ${round + 1}/15`);
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    log('info', 'agent', `ReAct round ${round + 1}/${MAX_ROUNDS}`);
 
-    // أعد بناء sysInstruction في كل round مع أحدث memory
     const sysInst = buildSystemInstruction(soul, toolsMd, currentMemory);
     const raw     = await callModel(messages, sysInst);
-    log('info', 'agent', `Model (${raw.length}ch)`, { preview: raw.slice(0, 70) });
+    log('info', 'agent', `Model response (${raw.length}ch)`, { preview: raw.slice(0, 80) });
 
     const actions  = parseActions(raw);
     const textOnly = extractText(raw);
 
-    // النص خارج الـ actions → thinking chunks (مرئي للمستخدم live)
+    // النص خارج الـ actions → thinking visible للمستخدم
     if (textOnly) {
       await appendToConv(uid, convId, 'thinking_chunks', textOnly);
-      log('info', 'agent', `[think] ${textOnly.slice(0, 60)}`);
+      log('info', 'agent', `[think] ${textOnly.slice(0, 80)}`);
     }
 
     // لا actions = رد نهائي
@@ -207,43 +203,53 @@ async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
     const resultParts = [];
 
     for (const action of actions) {
-      // ── shell ────────────────────────────────────────────────────
+      // ── shell ──────────────────────────────────────────────────
       if (action.type === 'shell') {
-        log('info', 'agent', `[shell] ${action.script.slice(0, 60)}`);
-        await appendToConv(uid, convId, 'tool_updates', '⚙️ shell...');
+        log('info', 'agent', `[shell] executing (${action.script.length}ch)`);
+        await appendToConv(uid, convId, 'tool_updates', '⚙️ جارٍ التنفيذ...');
         const result = await executeShell(action.script);
-        const label  = result.success ? '✅ shell نجح' : `❌ shell: ${result.error?.slice(0,60)}`;
+        const label  = result.success
+          ? `✅ تم (${result.stdout?.slice(0,80) || 'بدون مخرجات'})`
+          : `❌ خطأ: ${result.error?.slice(0,80)}`;
         await appendToConv(uid, convId, 'tool_updates', label);
-        resultParts.push({ type: 'shell', success: result.success, stdout: result.stdout, stderr: result.stderr, error: result.error });
+        resultParts.push({
+          type: 'shell',
+          success:   result.success,
+          stdout:    result.stdout?.slice(0, 4000),
+          stderr:    result.stderr?.slice(0, 800),
+          error:     result.error,
+          exit_code: result.exit_code,
+        });
       }
 
-      // ── update_memory ────────────────────────────────────────────
-      // AI يكتب ملف memory.md كاملاً من أوله لآخره
+      // ── update_memory ──────────────────────────────────────────
       else if (action.type === 'update_memory') {
         log('info', 'agent', `[update_memory] ${action.content.length}ch`);
         await appendToConv(uid, convId, 'tool_updates', '💾 تحديث الذاكرة...');
         try {
           await saveMemory(uid, action.content);
-          currentMemory = action.content;  // استخدم النسخة الجديدة مباشرة
+          currentMemory = action.content;
           memUpdated    = true;
-          await appendToConv(uid, convId, 'tool_updates', '✅ تم تحديث memory.md');
+          await appendToConv(uid, convId, 'tool_updates', '✅ تم حفظ memory.md');
           resultParts.push({ type: 'update_memory', success: true, size: action.content.length });
         } catch (e) {
-          await appendToConv(uid, convId, 'tool_updates', `❌ فشل الحفظ: ${e.message.slice(0, 60)}`);
+          await appendToConv(uid, convId, 'tool_updates', `❌ فشل حفظ الذاكرة: ${e.message.slice(0,60)}`);
           resultParts.push({ type: 'update_memory', success: false, error: e.message });
         }
       }
     }
 
-    // أضف النتائج للـ conversation
-    messages.push({ role: 'model',  parts: [{ text: raw }] });
+    // أضف النتائج للمحادثة
+    messages.push({ role: 'model', parts: [{ text: raw }] });
     messages.push({
       role:  'user',
-      parts: [{ text: `نتائج:\n${JSON.stringify(resultParts, null, 2)}\n\nأكمل ردك للمستخدم بالعربية بإيجاز. لا تكرر tokens.` }],
+      parts: [{ text: `نتائج الـ actions:\n${JSON.stringify(resultParts, null, 2)}\n\nبناءً على هذه النتائج، أكمل. إذا اكتملت المهمة → اكتب الرد النهائي بدون أي action. إذا تبقى خطوات → نفّذها.` }],
     });
   }
 
-  if (!finalText) finalText = '❌ لم أتمكن من إتمام الطلب — جرب مرة أخرى.';
+  if (!finalText) {
+    finalText = '⚠️ وصلت للحد الأقصى من الجولات دون رد نهائي. راجع tool_updates لرؤية ما تم.';
+  }
 
   return {
     finalText,
@@ -262,38 +268,34 @@ async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
 async function main() {
   log('info', 'agent', `Starting — uid=${UID?.slice(0,8)} conv=${CONV_ID}`);
 
-  // soul.md و tools.md من skills/ محلياً فقط — لا Firestore
   const soul    = readSkill('soul.md');
   const toolsMd = readSkill('tools.md');
   if (!soul) { log('error', 'agent', 'skills/soul.md not found'); process.exit(1); }
 
-  // تحديث status → running
   await updateConv(UID, CONV_ID, { status: 'running' });
 
-  // تحميل الـ conversation (اللي أنشأه الـ frontend)
   const conv = await getConv(UID, CONV_ID);
   if (!conv) { log('error', 'agent', 'Conversation not found in Firestore'); process.exit(1); }
 
   const userMsg = conv.user_message;
   const history = conv.history || [];
 
-  // Thinking pass — SSE chunks → Firestore thinking_chunks
+  // Thinking pass
   await updateConv(UID, CONV_ID, { status: 'thinking' });
   await streamThinking(userMsg, soul, async (chunk) => {
     await appendToConv(UID, CONV_ID, 'thinking_chunks', chunk);
   });
 
-  // ReAct loop
+  // ReAct loop — بدون timeout خارجي
   await updateConv(UID, CONV_ID, { status: 'running' });
   const { finalText, updatedHistory, memUpdated } = await reactLoop(
     UID, CONV_ID, userMsg, history, soul, toolsMd,
   );
 
-  // حفظ الرد النهائي + history كامل
   await saveConv(UID, CONV_ID, {
     status:         'done',
     final_response: finalText,
-    history:        updatedHistory,  // history كامل محفوظ في Firestore
+    history:        updatedHistory,
     finished_at:    new Date().toISOString(),
   });
 
