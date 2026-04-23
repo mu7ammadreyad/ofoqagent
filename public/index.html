@@ -115,6 +115,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
   transition:background .15s;
 }
 .history-item:hover{background:var(--bg);}
+.history-item.active-session{background:var(--accent-dim);color:var(--accent);font-weight:500;}
 .sidebar-footer{margin-top:auto;padding-top:12px;border-top:1px solid var(--border);}
 .user-email{font-size:12px;color:var(--text-sub);margin-bottom:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .btn-logout{
@@ -413,16 +414,16 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
         </g>
       </svg>
       <h1 class="hero-title">أفق — OFOQ Agent</h1>
-      <p class="hero-sub">نشر المحتوى الإسلامي تلقائياً · GitHub Actions · Firebase</p>
+      <p class="hero-sub">مساعد ذكي متكامل · ينفذ أي مهمة · GitHub Actions · Firebase</p>
       <div class="chips" id="heroChips">
-        <div class="chip" data-step="0" onclick="runScenario(0)"><i class="ph ph-key"></i> إعداد Dispatch Token</div>
-        <div class="chip" data-step="1" onclick="runScenario(1)"><i class="ph ph-github-logo"></i> ربط GitHub</div>
-        <div class="chip" data-step="2" onclick="runScenario(2)"><i class="ph ph-youtube-logo"></i> إضافة YouTube</div>
-        <div class="chip" data-step="3" onclick="runScenario(3)"><i class="ph ph-rocket-launch"></i> ابدأ النشر</div>
-        <div class="chip" data-step="4" onclick="runScenario(4)"><i class="ph ph-calendar-dots"></i> جدولة يومية</div>
-        <div class="chip" onclick="fillInput('ما هي حالة النظام؟')"><i class="ph ph-gauge"></i> حالة النظام</div>
-        <div class="chip" onclick="fillInput('اعرض الجداول النشطة')"><i class="ph ph-list-dashes"></i> الجداول</div>
-        <div class="chip" onclick="fillInput('افحص صحة التوكنز')"><i class="ph ph-shield-check"></i> فحص الصحة</div>
+        <div class="chip" onclick="fillInput('اكتب لي سكريبت Python يحمّل ملف CSV من URL ويحلله ويطبع إحصائيات')"><i class="ph ph-code"></i> سكريبت Python</div>
+        <div class="chip" onclick="fillInput('ابحث في الإنترنت عن أحدث أسعار Bitcoin وأخبرني بالوضع الحالي')"><i class="ph ph-magnifying-glass"></i> بحث ومعلومات</div>
+        <div class="chip" onclick="fillInput('أريد جدولة مهمة تتكرر كل يوم الساعة 8 صباحاً — أحتاجك تذكّرها وتنفّذها')"><i class="ph ph-calendar-dots"></i> جدولة مهمة</div>
+        <div class="chip" onclick="fillInput('راجع هذا الكود وأصلح الأخطاء:\n```python\nprint(\"Hello World\"\n```')"><i class="ph ph-bug"></i> مراجعة كود</div>
+        <div class="chip" onclick="fillInput('حمّل هذا الملف من GitHub وحلله: https://raw.githubusercontent.com/torvalds/linux/master/README')"><i class="ph ph-download"></i> جلب وتحليل</div>
+        <div class="chip" onclick="fillInput('أنشئ لي ملف JSON يحتوي على 10 أسئلة اختبار في البرمجة')"><i class="ph ph-file-text"></i> توليد محتوى</div>
+        <div class="chip" onclick="fillInput('ما هي حالة النظام؟ وما الذي تتذكره عني؟')"><i class="ph ph-gauge"></i> حالة النظام</div>
+        <div class="chip" onclick="fillInput('احسب لي: كم يوماً تبقى حتى نهاية السنة؟ واعرض التاريخ الحالي بتوقيت القاهرة')"><i class="ph ph-calculator"></i> حسابات وتواريخ</div>
       </div>
     </div>
 
@@ -449,7 +450,7 @@ body,.bubble,.input-area textarea,.think-text,.agent-update,
           </div>
         </div>
       </div>
-      <div class="input-hint">OFOQ Agent v5 · GitHub Actions · Firebase</div>
+      <div class="input-hint">OFOQ Agent v6 · GitHub Actions · Firebase · أي مهمة، في أي وقت</div>
     </div>
   </div>
 </div>
@@ -516,8 +517,11 @@ function showApp() {
   const email = currentUser.email || currentUser.displayName || 'مستخدم';
   document.getElementById('userEmailDisplay').textContent = email;
   document.getElementById('userEmailSidebar').textContent = email;
+  // ← UID في الـ URL
+  window.history.pushState({ uid: currentUser.uid }, '', '?uid=' + currentUser.uid);
   loadTheme();
   fetchStatus();
+  loadConversations();
 }
 function showLoginScreen() {
   document.getElementById('loginScreen').style.display = 'flex';
@@ -546,6 +550,7 @@ function logout() {
   if (convListener) { convListener(); convListener = null; }
   fbAuth.signOut();
   chatHistory = []; sessions = [];
+  window.history.pushState({}, '', window.location.pathname);
 }
 
 // ================================================================
@@ -673,6 +678,7 @@ function buildFileMsg(text, file) {
 let chatHistory   = [];
 let sessions      = [];
 let currentSession = Date.now();
+let currentConvId  = null;
 let isGenerating  = false;
 
 // ================================================================
@@ -712,6 +718,9 @@ async function sendMessage(text, fileData) {
 
   // 1. Create Firestore conversation document
   const convId = `conv_${Date.now()}`;
+  // ← تحديث URL بـ conv ID
+  window.history.pushState({ convId }, '', '?uid=' + currentUser.uid + '&conv=' + convId);
+  currentConvId = convId;
   await db.doc(`users/${currentUser.uid}/conversations/${convId}`).set({
     status:          'pending',
     created_at:      firebase.firestore.Timestamp.now(),
@@ -756,6 +765,7 @@ async function sendMessage(text, fileData) {
         renderMsg('ai', data.final_response);
         chatHistory.push({ role: 'assistant', content: data.final_response });
         saveSession(text);
+        loadConversations(); // reload sidebar
         isGenerating = false; setBusy(false);
       }
 
@@ -882,37 +892,81 @@ function showUpdatePill(text) {
 function removeUpdateEl() { document.getElementById('updPill')?.remove(); updateEl = null; }
 
 // ================================================================
-// SESSIONS
+// CONVERSATIONS — Firestore-backed sidebar
 // ================================================================
+async function loadConversations() {
+  if (!currentUser) return;
+  try {
+    const snap = await db.collection(`users/${currentUser.uid}/conversations`)
+      .orderBy('created_at', 'desc')
+      .limit(30)
+      .get();
+    sessions = snap.docs
+      .filter(d => d.data().final_response || d.data().user_message)
+      .map(d => ({
+        id:      d.id,
+        preview: (d.data().user_message || 'محادثة').slice(0, 45),
+        data:    d.data(),
+      }));
+    renderSessions();
+  } catch (e) {
+    console.warn('loadConversations failed:', e);
+  }
+}
+
 function saveSession(firstMsg) {
-  const preview = (firstMsg||'محادثة').slice(0,40);
-  const idx = sessions.findIndex(s=>s.id===currentSession);
-  const obj = { id:currentSession, preview, history:chatHistory.map(m=>({...m})) };
-  if (idx>=0) sessions[idx]=obj; else sessions.unshift(obj);
-  sessions=sessions.slice(0,15);
+  const preview  = (firstMsg || 'محادثة').slice(0, 45);
+  const existing = sessions.findIndex(s => s.id === currentConvId);
+  const obj      = { id: currentConvId, preview, data: { user_message: firstMsg } };
+  if (existing >= 0) sessions[existing] = obj;
+  else sessions.unshift(obj);
+  sessions = sessions.slice(0, 30);
   renderSessions();
 }
+
 function renderSessions() {
-  document.getElementById('historyList').innerHTML = sessions.map(s=>
-    `<div class="history-item" onclick="loadSession(${s.id})">${escHtml(s.preview)}</div>`
+  document.getElementById('historyList').innerHTML = sessions.map(s =>
+    `<div class="history-item ${s.id === currentConvId ? 'active-session' : ''}"
+          onclick="loadSession('${s.id}')">${escHtml(s.preview)}</div>`
   ).join('');
 }
-function loadSession(id) {
-  const s = sessions.find(x=>x.id===id); if (!s) return;
-  currentSession=id; chatHistory=s.history.map(m=>({...m}));
-  document.getElementById('messages').innerHTML='';
+
+async function loadSession(id) {
+  if (!currentUser) return;
+  currentConvId  = id;
+  currentSession = Date.now();
+  window.history.pushState({ convId: id }, '', '?uid=' + currentUser.uid + '&conv=' + id);
+
+  document.getElementById('messages').innerHTML = '';
   document.getElementById('hero').classList.add('gone');
-  for (const m of chatHistory) renderMsg(m.role==='user'?'user':'ai', m.content);
-  if (window.innerWidth<=768) document.getElementById('sidebar').classList.remove('open');
+  if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open');
+
+  try {
+    const doc = await db.doc(`users/${currentUser.uid}/conversations/${id}`).get();
+    if (!doc.exists) return;
+    const data = doc.data();
+    chatHistory = data.history || [];
+    // عرض الـ history
+    for (const m of chatHistory) renderMsg(m.role === 'user' ? 'user' : 'ai', m.content);
+    // لو الـ final_response موجود وآخر رسالة في history مش منه، أضفها
+    if (data.final_response && (!chatHistory.length || chatHistory[chatHistory.length - 1]?.role !== 'assistant')) {
+      renderMsg('ai', data.final_response);
+    }
+  } catch (e) {
+    console.error('loadSession failed:', e);
+  }
+  renderSessions();
 }
+
 function resetChat() {
-  if (convListener) { convListener(); convListener=null; }
-  saveSession('');
-  chatHistory=[]; currentSession=Date.now();
-  document.getElementById('messages').innerHTML='';
+  if (convListener) { convListener(); convListener = null; }
+  chatHistory = []; currentConvId = null; currentSession = Date.now();
+  document.getElementById('messages').innerHTML = '';
   document.getElementById('hero').classList.remove('gone');
-  document.querySelectorAll('.chip[data-step]').forEach(c=>c.classList.remove('active'));
-  if (window.innerWidth<=768) document.getElementById('sidebar').classList.remove('open');
+  document.querySelectorAll('.chip[data-step]').forEach(c => c.classList.remove('active'));
+  if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open');
+  if (currentUser) window.history.pushState({ uid: currentUser.uid }, '', '?uid=' + currentUser.uid);
+  renderSessions();
 }
 
 // ================================================================

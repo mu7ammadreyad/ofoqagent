@@ -203,8 +203,7 @@ export async function executeShell(script) {
   let stdout = '', stderr = '';
   try {
     stdout = execSync(`bash "${tmpFile}"`, {
-      timeout:   55_000,          // 55s — GitHub Actions job timeout 10min
-      maxBuffer: 1024 * 1024,     // 1MB output
+      maxBuffer: 10 * 1024 * 1024,  // 10MB output
       encoding:  'utf8',
       cwd:       PROJECT_DIR,
       env: { ...process.env, TERM: 'xterm-256color' },

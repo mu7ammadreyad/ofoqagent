@@ -110,9 +110,6 @@ async function callModel(messages, systemInstruction, attempt = 0) {
     .map(m => ({ role: m.role, parts: (m.parts || []).filter(p => !p.thought) }))
     .filter(m => m.parts.length);
 
-  const ctrl  = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 3500_000);
-
   let resp;
   try {
     resp = await fetch(url, {
@@ -121,26 +118,23 @@ async function callModel(messages, systemInstruction, attempt = 0) {
       body: JSON.stringify({
         contents: clean,
         systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: { temperature: 0.3, maxOutputTokens: 2048 },
+        generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
       }),
-      signal: ctrl.signal,
     });
   } catch (e) {
-    clearTimeout(timer);
-    if (attempt < 3) {
-      const wait = [500, 2000, 5000][attempt] || 5000;
+    if (attempt < 5) {
+      const wait = [500, 2000, 5000, 10000, 20000][attempt] || 20000;
       log('warn', 'agent', `fetch failed (attempt ${attempt+1}) → retry ${wait}ms`, { error: e.message });
       await sleep(wait);
       return callModel(messages, systemInstruction, attempt + 1);
     }
-    throw new Error(`AI unreachable after 3 attempts: ${e.message}`);
+    throw new Error(`AI unreachable after 5 attempts: ${e.message}`);
   }
-  clearTimeout(timer);
 
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
-    if ((resp.status === 429 || resp.status === 503) && attempt < 3) {
-      const wait = [1000, 3000, 6000][attempt] || 6000;
+    if ((resp.status === 429 || resp.status === 503) && attempt < 5) {
+      const wait = [1000, 3000, 6000, 12000, 24000][attempt] || 24000;
       log('warn', 'agent', `HTTP ${resp.status} → retry ${wait}ms`);
       await sleep(wait);
       return callModel(messages, systemInstruction, attempt + 1);
@@ -186,8 +180,8 @@ async function reactLoop(uid, convId, userMsg, history, soul, toolsMd) {
 
   let finalText = '';
 
-  for (let round = 0; round < 8; round++) {
-    log('info', 'agent', `ReAct round ${round + 1}/8`);
+  for (let round = 0; round < 15; round++) {
+    log('info', 'agent', `ReAct round ${round + 1}/15`);
 
     // أعد بناء sysInstruction في كل round مع أحدث memory
     const sysInst = buildSystemInstruction(soul, toolsMd, currentMemory);
