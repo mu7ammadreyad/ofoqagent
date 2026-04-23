@@ -1,13 +1,13 @@
 {
   "name": "ofoq-agent",
-  "version": "5.0.0",
+  "version": "6.0.0",
   "type": "module",
   "private": true,
-  "description": "OFOQ Publisher Agent — GitHub Actions + Firebase",
+  "description": "OFOQ General Agent — GitHub Actions + Firebase + Scheduling",
   "engines": { "node": ">=20" },
   "scripts": {
-    "agent": "node src/agent.js",
-    "publish": "node src/daily-publish.js"
+    "agent":     "node src/agent.js",
+    "scheduler": "node src/scheduler.js"
   },
   "dependencies": {
     "firebase-admin": "^12.3.0"

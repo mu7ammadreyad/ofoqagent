@@ -203,8 +203,7 @@ export async function executeShell(script) {
   let stdout = '', stderr = '';
   try {
     stdout = execSync(`bash "${tmpFile}"`, {
-      timeout:   0,               // لا timeout — المهمة تكتمل مهما طالت
-      maxBuffer: 10 * 1024 * 1024, // 10MB output
+      maxBuffer: 10 * 1024 * 1024,  // 10MB output
       encoding:  'utf8',
       cwd:       PROJECT_DIR,
       env: { ...process.env, TERM: 'xterm-256color' },
@@ -231,3 +230,231 @@ export async function executeShell(script) {
     stderr:    '',
   };
 }
+
+// ================================================================
+// SCHEDULING SYSTEM
+// ────────────────────────────────────────────────────────────────
+// كل جدول = doc في `schedules/{schedId}` (global للـ scheduler)
+//         + doc في `users/{uid}/schedules/{schedId}` (للـ frontend)
+//         + conv في `users/{uid}/conversations/conv_sched_xxx`
+// ================================================================
+
+/**
+ * parseCronNext — يحسب موعد التشغيل القادم لـ cron expression
+ * يدعم: * / , - وأرقام ثابتة
+ * الحقول: minute hour day-of-month month day-of-week
+ */
+export function parseCronNext(cronExpr, afterDate = new Date(), timezone = 'Africa/Cairo') {
+  const parts = cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5) throw new Error(`cron غير صالح: "${cronExpr}" — يجب أن يكون 5 حقول`);
+  const [minP, hrP, domP, monP, dowP] = parts;
+
+  const matches = (part, val, min = 0, max = 59) => {
+    if (part === '*') return true;
+    for (const seg of part.split(',')) {
+      if (seg.includes('/')) {
+        const [range, step] = seg.split('/');
+        const s = parseInt(step);
+        const [lo, hi] = range === '*' ? [min, max] : range.split('-').map(Number);
+        for (let v = lo; v <= hi; v += s) if (v === val) return true;
+      } else if (seg.includes('-')) {
+        const [a, b] = seg.split('-').map(Number);
+        if (val >= a && val <= b) return true;
+      } else {
+        if (parseInt(seg) === val) return true;
+      }
+    }
+    return false;
+  };
+
+  // ابدأ من الدقيقة التالية
+  const d = new Date(afterDate.getTime() + 60_000);
+  d.setSeconds(0, 0);
+
+  for (let i = 0; i < 527_040; i++) { // max ~366 days
+    // تحويل للتوقيت المحلي
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(d);
+    const get = (t) => parseInt(parts.find(p => p.type === t)?.value ?? '0');
+    const [mn, hr, dom, mon, dow] = [
+      get('minute'), get('hour'), get('day'), get('month'),
+      new Date(d.toLocaleString('en-US', { timeZone: timezone })).getDay(),
+    ];
+    if (
+      matches(minP, mn, 0, 59) &&
+      matches(hrP,  hr, 0, 23) &&
+      matches(domP, dom, 1, 31) &&
+      matches(monP, mon, 1, 12) &&
+      matches(dowP, dow, 0, 6)
+    ) return new Date(d);
+
+    d.setTime(d.getTime() + 60_000);
+  }
+  return null;
+}
+
+/**
+ * createSchedule — ينشئ جدول في Firestore + محادثة مخصصة له
+ */
+export async function createSchedule(uid, { name, description = '', cron, taskPrompt, timezone = 'Africa/Cairo' }) {
+  const db      = await getDb();
+  const schedId = `sched_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const convId  = `conv_sched_${schedId}`;
+
+  let nextRun = null;
+  try {
+    nextRun = parseCronNext(cron, new Date(), timezone);
+  } catch (e) {
+    throw new Error(`cron غير صالح: ${e.message}`);
+  }
+
+  const now      = new Date().toISOString();
+  const schedDoc = {
+    id:          schedId,
+    uid,
+    name,
+    description,
+    task_prompt: taskPrompt,
+    cron,
+    timezone,
+    status:      'active',
+    created_at:  now,
+    last_run_at: null,
+    next_run_at: nextRun?.toISOString() ?? null,
+    conv_id:     convId,
+    run_count:   0,
+  };
+
+  // Global — للـ scheduler
+  await db.doc(`schedules/${schedId}`).set(schedDoc);
+  // Per-user — للـ frontend
+  await db.doc(`users/${uid}/schedules/${schedId}`).set(schedDoc);
+  // المحادثة المخصصة
+  await db.doc(`users/${uid}/conversations/${convId}`).set({
+    type:          'scheduled',
+    schedule_id:   schedId,
+    schedule_name: name,
+    schedule_cron: cron,
+    schedule_desc: description,
+    created_at:    now,
+    messages:      [],
+    last_updated:  now,
+    status:        'active',
+  });
+
+  log('ok', 'schedule', `Created ${schedId} — next: ${schedDoc.next_run_at}`);
+  return { schedId, convId, nextRun: schedDoc.next_run_at };
+}
+
+/**
+ * getSchedules — يجلب كل الجداول النشطة للمستخدم
+ */
+export async function getSchedules(uid) {
+  try {
+    const db   = await getDb();
+    const snap = await db.collection(`users/${uid}/schedules`)
+      .where('status', '==', 'active').get();
+    return snap.docs.map(d => d.data());
+  } catch (e) {
+    log('error', 'schedule', 'getSchedules failed', { error: e.message });
+    return [];
+  }
+}
+
+/**
+ * getDueSchedules — يجلب الجداول التي حان وقت تشغيلها (للـ scheduler)
+ */
+export async function getDueSchedules() {
+  try {
+    const db  = await getDb();
+    const now = new Date().toISOString();
+    const snap = await db.collection('schedules')
+      .where('status', '==', 'active')
+      .where('next_run_at', '<=', now)
+      .get();
+    return snap.docs.map(d => d.data());
+  } catch (e) {
+    log('error', 'schedule', 'getDueSchedules failed', { error: e.message });
+    return [];
+  }
+}
+
+/**
+ * markScheduleRan — يحدّث الجدول بعد التشغيل ويحسب الموعد القادم
+ */
+export async function markScheduleRan(schedId, uid, cron, timezone = 'Africa/Cairo') {
+  try {
+    const db      = await getDb();
+    const now     = new Date();
+    const nextRun = parseCronNext(cron, now, timezone);
+    // جلب run_count الحالي
+    const doc      = await db.doc(`schedules/${schedId}`).get();
+    const runCount = (doc.data()?.run_count ?? 0) + 1;
+    const upd = {
+      last_run_at: now.toISOString(),
+      next_run_at: nextRun?.toISOString() ?? null,
+      run_count:   runCount,
+    };
+    await db.doc(`schedules/${schedId}`).update(upd);
+    await db.doc(`users/${uid}/schedules/${schedId}`).update(upd);
+    log('ok', 'schedule', `Marked ran — schedId=${schedId} runCount=${runCount} next=${upd.next_run_at}`);
+    return runCount;
+  } catch (e) {
+    log('error', 'schedule', 'markScheduleRan failed', { error: e.message });
+    return 0;
+  }
+}
+
+/**
+ * appendScheduleMessage — يضيف رسالة لمحادثة الجدول (كل تشغيل رسالة)
+ */
+export async function appendScheduleMessage(uid, convId, schedId, content, runNumber) {
+  try {
+    const { getFirestore, FieldValue } = await import('firebase-admin/firestore');
+    const db = getFirestore();
+    await db.doc(`users/${uid}/conversations/${convId}`).update({
+      messages:     FieldValue.arrayUnion({
+        timestamp:  new Date().toISOString(),
+        run_number: runNumber,
+        content,
+        status:     'done',
+      }),
+      last_updated: new Date().toISOString(),
+    });
+    log('ok', 'schedule', `Appended message #${runNumber} to ${convId}`);
+  } catch (e) {
+    log('error', 'schedule', 'appendScheduleMessage failed', { error: e.message });
+  }
+}
+
+/**
+ * getScheduleById — يجلب بيانات جدول معين
+ */
+export async function getScheduleById(schedId) {
+  try {
+    const db  = await getDb();
+    const doc = await db.doc(`schedules/${schedId}`).get();
+    return doc.exists ? doc.data() : null;
+  } catch (e) {
+    log('error', 'schedule', 'getScheduleById failed', { error: e.message });
+    return null;
+  }
+}
+
+/**
+ * deactivateSchedule — إيقاف جدول
+ */
+export async function deactivateSchedule(uid, schedId) {
+  try {
+    const db = await getDb();
+    await db.doc(`schedules/${schedId}`).update({ status: 'paused' });
+    await db.doc(`users/${uid}/schedules/${schedId}`).update({ status: 'paused' });
+    log('ok', 'schedule', `Deactivated ${schedId}`);
+  } catch (e) {
+    log('error', 'schedule', 'deactivateSchedule failed', { error: e.message });
+  }
+}
+
