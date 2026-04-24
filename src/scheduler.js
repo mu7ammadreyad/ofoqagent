@@ -1,200 +1,148 @@
-// scheduler.js — OFOQ Scheduler v6.0
-// يُشتغل كل دقيقة عبر GitHub Actions cron (`* * * * *`)
-// يقرأ schedules النشطة من Firestore → يُنفّذ كل مهمة حانت مباشرة عبر Gemini API
-//
-// الفرق عن agent.js:
-//   - لا يحتاج CONV_UID / CONV_ID من environment
-//   - يقرأ جميع schedules النشطة عبر getDueSchedules()
-//   - لكل schedule حانت: يستدعي Gemini مباشرة ويُضيف النتيجة لمحادثة الجدول
+// scheduler.js — OFOQ Agent v6.1
+// يشتغل كل ساعة عبر GitHub Actions cron
+// يقرأ المهام المجدولة من Firestore وينشئ محادثات جديدة لكل مهمة حانت
 
-import { execSync }  from 'child_process';
-import { dirname, resolve } from 'path';
-import { fileURLToPath }   from 'url';
+import { log, sleep, getDb, getAllDueTasks, updateScheduledTask, calcNextRun } from './tools.js';
 
-import {
-  log, sleep,
-  getDueSchedules, markScheduleRan,
-  createConv, saveConv, appendScheduleMessage,
-  loadMemory,
-} from './tools.js';
-
-const __dirname    = dirname(fileURLToPath(import.meta.url));
-const PROJECT_DIR  = resolve(__dirname, '..');
-const GEMINI_KEY   = process.env.GEMINI_API_KEY;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN_FOR_DISPATCH;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
 const GITHUB_REPO  = process.env.GITHUB_AGENT_REPO;
-const GH_TOKEN     = process.env.GITHUB_TOKEN_FOR_DISPATCH;
 
-if (!GEMINI_KEY) { console.error('❌ GEMINI_API_KEY missing'); process.exit(1); }
+if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+  console.error('❌ FIREBASE_SERVICE_ACCOUNT missing');
+  process.exit(1);
+}
+
+// ================================================================
+// إنشاء محادثة مجدولة وإطلاق GitHub Action
+// ================================================================
+async function dispatchTaskConversation(uid, convId) {
+  if (!GITHUB_TOKEN || !GITHUB_OWNER || !GITHUB_REPO) {
+    log('warn', 'scheduler', 'GitHub dispatch env missing — skipping dispatch');
+    return false;
+  }
+  const resp = await fetch(
+    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/dispatches`,
+    {
+      method:  'POST',
+      headers: {
+        Authorization:  `token ${GITHUB_TOKEN}`,
+        Accept:         'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+        'User-Agent':   'OFOQ-Scheduler/6.1',
+      },
+      body: JSON.stringify({
+        event_type:     'agent-chat',
+        client_payload: { uid, conv_id: convId },
+      }),
+    }
+  );
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    log('error', 'scheduler', `dispatch failed: ${resp.status}`, body);
+    return false;
+  }
+  return true;
+}
+
+// ================================================================
+// معالجة مهمة واحدة
+// ================================================================
+async function processTask(task) {
+  const { uid, taskId, title, message, schedule_type, hour, minute, days, timezone, run_count = 0, ref } = task;
+
+  log('info', 'scheduler', `Processing task: ${taskId} | "${title}" | uid=${uid?.slice(0,8)}`);
+
+  const db = await getDb();
+
+  // إنشاء conv_id فريد للمهمة المجدولة
+  const today  = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' }).replace(/-/g, '');
+  const convId = `sched_${taskId}_${today}`;
+
+  // تحقق — هل اتشغلت المهمة دي النهارده بالفعل؟
+  const existing = await db.doc(`users/${uid}/conversations/${convId}`).get();
+  if (existing.exists) {
+    log('warn', 'scheduler', `Task ${taskId} already ran today — skipping`);
+    // حدّث next_run للمرة القادمة
+    const nextRun = calcNextRun({ schedule_type, hour, minute, days, timezone });
+    await ref.update({ next_run: nextRun });
+    return;
+  }
+
+  // الرسالة للـ Agent — تتضمن سياق المهمة المجدولة
+  const agentMessage = [
+    `[مهمة مجدولة تلقائية — "${title}"]`,
+    ``,
+    message,
+    ``,
+    `تعليمات التنفيذ التلقائي:`,
+    `- هذه محادثة تلقائية لا يتدخل فيها المستخدم`,
+    `- نفّذ المهمة وحدّث الذاكرة بعد الانتهاء`,
+    `- اكتب ملخصاً موجزاً بالنتيجة في الرد النهائي`,
+  ].join('\n');
+
+  // إنشاء وثيقة المحادثة في Firestore
+  await db.doc(`users/${uid}/conversations/${convId}`).set({
+    status:          'pending',
+    created_at:      new Date().toISOString(),
+    user_message:    agentMessage,
+    history:         [],
+    thinking_chunks: [],
+    tool_updates:    [],
+    final_response:  null,
+    error:           null,
+    title:           `⏰ ${title}`,
+    is_scheduled:    true,
+    task_id:         taskId,
+    task_title:      title,
+    schedule_date:   today,
+  });
+
+  // تشغيل GitHub Action
+  const dispatched = await dispatchTaskConversation(uid, convId);
+
+  // حدّث المهمة: last_run + next_run + run_count
+  const nextRun = calcNextRun({ schedule_type, hour, minute, days, timezone });
+  await ref.update({
+    last_run:  new Date().toISOString(),
+    next_run:  nextRun,
+    run_count: run_count + 1,
+    last_conv_id: convId,
+  });
+
+  log('ok', 'scheduler', `Task ${taskId} dispatched — conv: ${convId} | next: ${nextRun}`);
+}
 
 // ================================================================
 // MAIN
 // ================================================================
 async function main() {
-  const now = new Date();
-  log('info', 'scheduler', `Starting — ${now.toISOString()}`);
+  log('info', 'scheduler', `Starting — ${new Date().toISOString()}`);
 
-  const due = await getDueSchedules();
-  log('info', 'scheduler', `Due schedules: ${due.length}`);
+  const dueTasks = await getAllDueTasks();
+  log('info', 'scheduler', `Found ${dueTasks.length} due task(s)`);
 
-  if (!due.length) {
-    log('ok', 'scheduler', 'No due schedules — done.');
+  if (dueTasks.length === 0) {
+    log('ok', 'scheduler', 'No due tasks — exiting');
     return;
   }
 
-  for (const sched of due) {
+  let success = 0, failed = 0;
+  for (const task of dueTasks) {
     try {
-      await runScheduledTask(sched, now);
-      await sleep(2000); // تأخير بسيط بين المهام
+      await processTask(task);
+      success++;
+      await sleep(1500);  // تأخير بسيط بين المهام
     } catch (e) {
-      log('error', 'scheduler', `Failed for sched ${sched.id}`, { error: e.message });
+      failed++;
+      log('error', 'scheduler', `Task ${task.taskId} failed`, { error: e.message });
     }
   }
 
-  log('ok', 'scheduler', 'All due schedules processed.');
-}
-
-// ================================================================
-// RUN A SINGLE SCHEDULED TASK
-// ================================================================
-async function runScheduledTask(sched, now) {
-  const { id: schedId, uid, name, task_prompt, cron, timezone = 'Africa/Cairo', conv_id: convId, run_count = 0 } = sched;
-
-  log('info', 'scheduler', `Running: "${name}" (${schedId.slice(-8)}) uid=${uid?.slice(0,8)}`);
-
-  // 1. احسب run number
-  const runNumber = run_count + 1;
-  const runLabel  = `#${runNumber} — ${now.toLocaleString('ar-EG', { timeZone: timezone })}`;
-
-  // 2. أضف entry لمحادثة الجدول (في البداية = "جارٍ التنفيذ")
-  await appendScheduleMessage(uid, convId, schedId, `⚙️ جارٍ التنفيذ... ${runLabel}`, runNumber);
-
-  // 3. استدعاء Gemini مباشرة لتنفيذ المهمة
-  const memory = await loadMemory(uid);
-  const result = await executeScheduledPrompt(task_prompt, memory, sched, runNumber, now, timezone);
-
-  // 4. احفظ النتيجة في محادثة الجدول
-  await appendScheduleMessage(uid, convId, schedId, result, runNumber);
-
-  // 5. حدّث next_run_at
-  await markScheduleRan(schedId, uid, cron, timezone);
-
-  log('ok', 'scheduler', `Done: "${name}" run #${runNumber}`);
-}
-
-// ================================================================
-// CALL GEMINI FOR SCHEDULED TASK
-// ================================================================
-async function executeScheduledPrompt(taskPrompt, memory, sched, runNumber, now, timezone) {
-  const nowStr = now.toLocaleString('ar-EG', { timeZone: timezone });
-  const systemInstruction = `أنت أفق — مساعد ذكي يُنفّذ مهمة مجدولة تلقائياً.
-
-## المهمة المجدولة
-الاسم: ${sched.name}
-الوصف: ${sched.description || '—'}
-Cron: ${sched.cron}
-التشغيل رقم: ${runNumber}
-الوقت الحالي: ${nowStr}
-
-## الذاكرة
-${memory}
-
-## تعليمات
-- نفّذ المهمة بشكل كامل ومستقل
-- إذا احتجت shell: اكتب الكود في action type="shell"
-- الرد النهائي يكون الناتج المباشر للمهمة (الحكمة، التقرير، البيانات، إلخ)
-- لا تحتاج تشرح ما ستفعله — نفّذ وأعطِ النتيجة مباشرة
-- الرد بالعربية دائماً`;
-
-  const messages = [{ role: 'user', parts: [{ text: taskPrompt }] }];
-
-  let fullResponse = '';
-  let attempt = 0;
-
-  while (attempt < 4) {
-    try {
-      const url  = `https://generativelanguage.googleapis.com/v1beta/models/gemma-4-26b-a4b-it:generateContent?key=${GEMINI_KEY}`;
-      const resp = await fetch(url, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: messages,
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          generationConfig:  { temperature: 0.7, maxOutputTokens: 4096 },
-        }),
-      });
-
-      if (!resp.ok) {
-        const err  = await resp.json().catch(() => ({}));
-        const wait = [2000, 5000, 10000][attempt] || 10000;
-        log('warn', 'scheduler', `HTTP ${resp.status} → retry ${wait}ms`);
-        await sleep(wait);
-        attempt++;
-        continue;
-      }
-
-      const data = await resp.json();
-      fullResponse = data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
-
-      // تحقق إذا فيه shell actions — نفّذها
-      const shellRe = /<action\s+type=["']shell["']>([\s\S]*?)<\/action>/gi;
-      let m;
-      let enriched = fullResponse;
-      while ((m = shellRe.exec(fullResponse)) !== null) {
-        const script = m[1].trim();
-        log('info', 'scheduler', `[sched-shell] ${script.slice(0, 60)}`);
-        const res = await runShell(script);
-        const out = res.success
-          ? `\n\n\`\`\`\n${res.stdout.slice(0, 1000)}\n\`\`\``
-          : `\n\n❌ shell فشل: ${res.error?.slice(0, 200)}`;
-        enriched = enriched.replace(m[0], out);
-      }
-
-      // إزالة action tags من الرد النهائي
-      enriched = enriched.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '').trim();
-      return enriched || '✅ تم التنفيذ (بدون ناتج نصي)';
-
-    } catch (e) {
-      const wait = [2000, 5000, 10000][attempt] || 10000;
-      log('warn', 'scheduler', `fetch failed → retry ${wait}ms`, { error: e.message });
-      await sleep(wait);
-      attempt++;
-    }
-  }
-
-  return `❌ فشل التنفيذ بعد ${attempt} محاولات`;
-}
-
-// ================================================================
-// SHELL RUNNER (مبسّط للـ scheduler)
-// ================================================================
-async function runShell(script) {
-  const { writeFileSync, unlinkSync, existsSync } = await import('fs');
-  const { tmpdir } = await import('os');
-  const { join }   = await import('path');
-
-  const id      = `sched_${Date.now()}`;
-  const tmpFile = join(tmpdir(), `${id}.sh`);
-  writeFileSync(tmpFile, `#!/bin/bash\nset -eo pipefail\n\n${script}\n`, 'utf8');
-
-  let stdout = '', stderr = '';
-  try {
-    stdout = execSync(`bash "${tmpFile}"`, {
-      maxBuffer: 5 * 1024 * 1024,
-      encoding: 'utf8',
-      cwd: PROJECT_DIR,
-      env: { ...process.env, TERM: 'xterm-256color' },
-    });
-    return { success: true, stdout: stdout.slice(0, 2000) };
-  } catch (e) {
-    stderr = (e.stderr || '') + (e.message || '');
-    return { success: false, error: stderr.slice(0, 500), stdout: (e.stdout || '').slice(0, 500) };
-  } finally {
-    try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
-  }
+  log('ok', 'scheduler', `Done — ${success} dispatched, ${failed} failed`);
 }
 
 main().catch(e => {
-  log('error', 'scheduler', 'Fatal', { error: e.message });
+  log('error', 'scheduler', 'Fatal error', { error: e.message });
   process.exit(1);
 });

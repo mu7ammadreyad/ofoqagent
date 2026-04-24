@@ -1,1415 +1,751 @@
-# OFOQ Tools — Shell Reference Manual v6.0
-# دليل شامل لكتابة كود صحيح في بيئة GitHub Actions Ubuntu
+# OFOQ Agent — دليل الأدوات الشامل
+> مرجع كامل للنموذج: Shell · Python · HTTP · Git · بيانات · ذاكرة · حل المشكلات
 
 ---
 
-## ⚠️ قواعد أساسية لا تُخالَف
+## فلسفة الكتابة الصحيحة
+
+قبل أي action — **فكّر أولاً**:
+1. ما المطلوب بالضبط؟
+2. ما المعلومات الموجودة في memory.md؟
+3. ما أفضل أسلوب تنفيذ؟ (shell ذرّي ← أفضل من سكريبت ضخم واحد)
+4. كيف أتحقق من النتيجة؟
+5. ماذا يحدث لو فشل؟
+
+---
+
+## SECTION A — Shell: القواعد الذهبية
 
 ```bash
+# دائماً: set -eo pipefail في أول كل سكريبت
 #!/bin/bash
-set -eo pipefail   # أوقف عند أي خطأ — دائماً في البداية
-
-# طباعة نتائج وسيطة للتحقق
-echo "✓ البيئة: $(uname -a)"
-echo "✓ Python: $(python3 --version)"
-echo "✓ المجلد: $(pwd)"
+set -eo pipefail
 ```
 
----
-
-## 1. Python — أساسيات كتابة كود صحيح
-
-### 1.1 Heredoc الأنظف (بدون مشاكل indentation)
-
+### A1. فحص المتغيرات قبل الاستخدام
 ```bash
-python3 << 'PYEOF'
-import sys, json, os, datetime
-
-# ✅ اطبع دائماً للتأكيد
-print("Python يعمل")
-print(f"Python version: {sys.version}")
-
-# ✅ تعامل مع الأخطاء دائماً
-try:
-    result = 10 / 0
-except ZeroDivisionError as e:
-    print(f"ERROR: {e}", file=sys.stderr)
-    sys.exit(1)
-PYEOF
-```
-
-### 1.2 Python مع إدخال من bash
-
-```bash
-# تمرير متغيرات bash لـ Python بشكل آمن
-TOKEN="ghp_xxx"
-REPO="my-repo"
-
-python3 << PYEOF
-import os, sys
-
-# ✅ اقرأ من env — لا تضع credentials مباشرة في الكود
-token = os.environ.get('TOKEN_VAR', '')
-repo  = os.environ.get('REPO_VAR', '')
-
-if not token:
-    print("ERROR: TOKEN_VAR مش موجود", file=sys.stderr)
-    sys.exit(1)
-
-print(f"Repo: {repo}")
-print(f"Token: {token[:8]}...")
-PYEOF
-```
-
-**⚠️ إذا استخدمت PYEOF بدون quotes، المتغيرات `$VAR` تتوسّع داخل الكود — خطر على credentials!**
-
-```bash
-# ✅ آمن — الـ PYEOF بين quotes، متغيرات bash لا تتوسّع
-TOKEN="$TOKEN" REPO_VAR="$REPO" python3 << 'PYEOF'
-import os
-token = os.environ['TOKEN']
-repo  = os.environ['REPO_VAR']
-print(f"Token: {token[:8]}...")
-PYEOF
-```
-
-### 1.3 معالجة JSON في Python
-
-```bash
-python3 << 'PYEOF'
-import json, sys
-
-# قراءة JSON من string
-raw = '{"name": "أفق", "version": 6, "active": true}'
-data = json.loads(raw)
-print(f"Name: {data['name']}")
-print(f"Active: {data['active']}")
-
-# قراءة JSON من ملف
-try:
-    with open('/tmp/data.json') as f:
-        config = json.load(f)
-    print(json.dumps(config, ensure_ascii=False, indent=2))
-except FileNotFoundError:
-    print("الملف غير موجود")
-
-# كتابة JSON
-output = {"status": "done", "count": 42, "items": ["a", "b"]}
-with open('/tmp/output.json', 'w') as f:
-    json.dump(output, f, ensure_ascii=False, indent=2)
-print("تم حفظ output.json")
-PYEOF
-```
-
-### 1.4 معالجة CSV
-
-```bash
-python3 << 'PYEOF'
-import csv, io, sys
-
-# بيانات مثال
-raw_csv = """name,score,date
-أحمد,95,2025-01-15
-محمد,87,2025-01-16
-فاطمة,92,2025-01-17
-"""
-
-reader = csv.DictReader(io.StringIO(raw_csv))
-rows = list(reader)
-
-print(f"عدد الصفوف: {len(rows)}")
-for row in rows:
-    print(f"  {row['name']}: {row['score']}")
-
-# كتابة CSV
-with open('/tmp/output.csv', 'w', newline='', encoding='utf-8') as f:
-    writer = csv.DictWriter(f, fieldnames=['name', 'score', 'date'])
-    writer.writeheader()
-    writer.writerows(rows)
-print("تم حفظ output.csv")
-PYEOF
-```
-
-### 1.5 HTTP requests في Python
-
-```bash
-pip install requests --quiet --break-system-packages
-
-python3 << 'PYEOF'
-import requests, json, sys
-
-# GET request
-try:
-    resp = requests.get(
-        'https://api.github.com/repos/torvalds/linux',
-        headers={'User-Agent': 'OFOQ/6.0'},
-        timeout=30
-    )
-    resp.raise_for_status()  # يرمي exception إذا status != 2xx
-    data = resp.json()
-    print(f"Stars: {data['stargazers_count']:,}")
-    print(f"Language: {data['language']}")
-except requests.Timeout:
-    print("ERROR: timeout", file=sys.stderr)
-    sys.exit(1)
-except requests.HTTPError as e:
-    print(f"ERROR: HTTP {e.response.status_code}", file=sys.stderr)
-    sys.exit(1)
-
-# POST request مع JSON body
-payload = {"message": "hello", "active": True}
-resp2 = requests.post(
-    'https://httpbin.org/post',
-    json=payload,
-    headers={'Authorization': 'Bearer TOKEN_HERE'},
-    timeout=30
-)
-print(f"POST status: {resp2.status_code}")
-PYEOF
-```
-
-### 1.6 تواريخ وأوقات
-
-```bash
-python3 << 'PYEOF'
-from datetime import datetime, timedelta, timezone
-import zoneinfo
-
-# توقيت القاهرة
-cairo_tz = zoneinfo.ZoneInfo('Africa/Cairo')
-now_cairo = datetime.now(cairo_tz)
-print(f"الآن في القاهرة: {now_cairo.strftime('%Y-%m-%d %H:%M:%S %Z')}")
-print(f"اليوم: {now_cairo.strftime('%A')} ({now_cairo.weekday()})")
-
-# UTC
-now_utc = datetime.now(timezone.utc)
-print(f"UTC: {now_utc.isoformat()}")
-
-# تواريخ مستقبلية
-tomorrow = now_cairo + timedelta(days=1)
-next_week = now_cairo + timedelta(weeks=1)
-print(f"غداً: {tomorrow.strftime('%Y-%m-%d')}")
-print(f"الأسبوع القادم: {next_week.strftime('%Y-%m-%d')}")
-
-# كم يوم تبقى على نهاية السنة
-year_end = datetime(now_cairo.year, 12, 31, tzinfo=cairo_tz)
-days_left = (year_end - now_cairo).days
-print(f"أيام متبقية على نهاية السنة: {days_left}")
-
-# تحويل timestamp
-ts = 1700000000
-dt = datetime.fromtimestamp(ts, tz=cairo_tz)
-print(f"Timestamp {ts} = {dt.strftime('%Y-%m-%d %H:%M')}")
-PYEOF
-```
-
-### 1.7 نظام الملفات
-
-```bash
-python3 << 'PYEOF'
-import os, shutil, pathlib
-
-# قراءة ملف
-try:
-    content = pathlib.Path('/tmp/test.txt').read_text(encoding='utf-8')
-    print(f"المحتوى: {content[:100]}")
-except FileNotFoundError:
-    print("الملف غير موجود")
-
-# كتابة ملف
-pathlib.Path('/tmp/output.txt').write_text(
-    "محتوى الملف هنا\nسطر ثاني\n",
-    encoding='utf-8'
-)
-
-# قراءة مجلد
-for f in pathlib.Path('/tmp').iterdir():
-    if f.is_file():
-        print(f"  {f.name}: {f.stat().st_size:,} bytes")
-
-# إنشاء مجلد وملفات
-os.makedirs('/tmp/my_project', exist_ok=True)
-(pathlib.Path('/tmp/my_project') / 'config.json').write_text('{}')
-
-# حذف ملف/مجلد
-try:
-    os.remove('/tmp/old_file.txt')
-    shutil.rmtree('/tmp/old_dir', ignore_errors=True)
-except: pass
-
-print("✓ عمليات الملفات تمت")
-PYEOF
-```
-
-### 1.8 تثبيت حزم Python وفحص التوفر
-
-```bash
-# تثبيت حزمة واحدة
-pip install requests --quiet --break-system-packages
-
-# تثبيت عدة حزم
-pip install requests pandas beautifulsoup4 --quiet --break-system-packages
-
-# التحقق من التثبيت
-python3 -c "import requests; print('requests OK:', requests.__version__)"
-
-# تثبيت مشروط (إذا غير موجود)
-python3 -c "import pandas" 2>/dev/null || pip install pandas --quiet --break-system-packages
-
-# قراءة requirements.txt
-echo "requests==2.31.0
-pandas>=2.0.0
-python-dotenv" > /tmp/requirements.txt
-pip install -r /tmp/requirements.txt --quiet --break-system-packages
-```
-
-### 1.9 subprocess — تشغيل أوامر من Python
-
-```bash
-python3 << 'PYEOF'
-import subprocess, sys
-
-# تشغيل أمر وقراءة النتيجة
-result = subprocess.run(
-    ['git', 'rev-parse', '--short', 'HEAD'],
-    capture_output=True, text=True, cwd='/tmp'
-)
-if result.returncode == 0:
-    print(f"Git commit: {result.stdout.strip()}")
-else:
-    print(f"Git error: {result.stderr.strip()}", file=sys.stderr)
-
-# تشغيل أمر بشكل آمن مع check=True
-try:
-    out = subprocess.check_output(
-        ['python3', '--version'],
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-    print(f"Python: {out.strip()}")
-except subprocess.CalledProcessError as e:
-    print(f"فشل: {e.output}", file=sys.stderr)
-    sys.exit(1)
-
-# تشغيل أمر معقد عبر shell
-result2 = subprocess.run(
-    'echo "hello" | tr a-z A-Z',
-    shell=True, capture_output=True, text=True
-)
-print(f"نتيجة: {result2.stdout.strip()}")
-PYEOF
-```
-
----
-
-## 2. curl — HTTP Requests
-
-### 2.1 GET بسيط
-
-```bash
-# JSON response
-curl -sf \
-  -H "Accept: application/json" \
-  -H "User-Agent: OFOQ/6.0" \
-  "https://api.github.com/repos/torvalds/linux" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Stars: {d[\"stargazers_count\"]:,}')"
-
-# مع Authorization
-TOKEN="ghp_xxx"
-curl -sf \
-  -H "Authorization: token $TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/user" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('login'), '|', d.get('name'))"
-```
-
-### 2.2 POST مع JSON body
-
-```bash
-TOKEN="ghp_xxx"
-OWNER="myuser"
-REPO="myrepo"
-
-# إرسال JSON
-curl -sf -X POST \
-  -H "Authorization: token $TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "User-Agent: OFOQ/6.0" \
-  -d '{"title":"Issue جديد","body":"محتوى الـ issue"}' \
-  "https://api.github.com/repos/$OWNER/$REPO/issues" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('Issue #' + str(d.get('number')), d.get('html_url'))"
-```
-
-### 2.3 تنزيل ملف
-
-```bash
-URL="https://example.com/file.zip"
-
-# تنزيل مع progress
-curl -L -o /tmp/file.zip "$URL"
-echo "الحجم: $(du -sh /tmp/file.zip | cut -f1)"
-
-# تنزيل بـ token مع follow redirects
-curl -sL \
-  -H "Authorization: token $TOKEN" \
-  -H "Accept: application/octet-stream" \
-  -o /tmp/downloaded_file \
-  "$URL"
-ls -lh /tmp/downloaded_file
-```
-
-### 2.4 معالجة أخطاء curl
-
-```bash
-# -f يفشل عند HTTP error (4xx, 5xx)
-# -s silent (بدون progress)
-# -S اعرض الأخطاء رغم -s
-
-response=$(curl -sfS \
-  -H "Authorization: token $TOKEN" \
-  "https://api.github.com/user" 2>&1) || {
-  echo "فشل curl: $response"
-  exit 1
-}
-
-echo "$response" | python3 -c "import sys,json; print(json.load(sys.stdin)['login'])"
-```
-
----
-
-## 3. Git Operations
-
-### 3.1 إعداد Git في GitHub Actions
-
-```bash
-git config --global user.email "agent@ofoq.app"
-git config --global user.name "OFOQ Agent"
-git config --global init.defaultBranch main
-echo "✓ Git configured"
-```
-
-### 3.2 Clone و Push
-
-```bash
-TOKEN="ghp_xxx"
-OWNER="myuser"
-REPO="myrepo"
-
-# Clone
-git clone "https://$TOKEN@github.com/$OWNER/$REPO.git" /tmp/repo
-cd /tmp/repo
-
-# إجراء تغييرات
-echo "تغيير جديد $(date)" >> README.md
-
-# Commit و Push
-git add -A
-git commit -m "تحديث تلقائي من OFOQ Agent $(date +%Y-%m-%d)"
-git push origin main
-
-echo "✓ تم Push بنجاح"
-```
-
-### 3.3 قراءة ملف من GitHub بدون clone
-
-```bash
-TOKEN="ghp_xxx"
-OWNER="myuser"
-REPO="myrepo"
-FILE_PATH="config/settings.json"
-
-# قراءة مباشرة عبر API
-curl -sf \
-  -H "Authorization: token $TOKEN" \
-  "https://api.github.com/repos/$OWNER/$REPO/contents/$FILE_PATH" \
-  | python3 -c "
-import sys, json, base64
-data = json.load(sys.stdin)
-content = base64.b64decode(data['content']).decode('utf-8')
-print(content)
-"
-```
-
-### 3.4 GitHub Releases
-
-```bash
-TOKEN="ghp_xxx"
-OWNER="myuser"
-REPO="myrepo"
-
-# جلب كل الـ releases
-curl -sf \
-  -H "Authorization: token $TOKEN" \
-  "https://api.github.com/repos/$OWNER/$REPO/releases" \
-  | python3 -c "
-import sys, json
-releases = json.load(sys.stdin)
-for r in releases[:5]:
-    print(f\"{r['tag_name']:20} | {r['name'][:40]:40} | assets: {len(r['assets'])}\")
-"
-
-# إنشاء release جديد
-curl -sf -X POST \
-  -H "Authorization: token $TOKEN" \
-  -H "Content-Type: application/json" \
-  "https://api.github.com/repos/$OWNER/$REPO/releases" \
-  -d "{
-    \"tag_name\": \"v1.0.0\",
-    \"name\": \"الإصدار الأول\",
-    \"body\": \"وصف الإصدار هنا\",
-    \"draft\": false,
-    \"prerelease\": false
-  }" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('Release ID:', d['id'], '|', d['html_url'])"
-```
-
----
-
-## 4. معالجة البيانات
-
-### 4.1 jq — فلترة JSON في bash
-
-```bash
-# تثبيت إذا غير موجود
-which jq || sudo apt-get install -y jq -q
-
-# استخراج قيمة
-echo '{"name": "أفق", "version": 6}' | jq -r '.name'
-
-# فلترة array
-echo '[{"id":1,"name":"a"},{"id":2,"name":"b"}]' | jq -r '.[].name'
-
-# فلترة بشرط
-echo '[{"score":95,"pass":true},{"score":40,"pass":false}]' \
-  | jq -r '.[] | select(.pass==true) | .score'
-
-# إنشاء JSON جديد
-jq -n --arg name "أفق" --argjson ver 6 '{"name":$name,"version":$ver}'
-```
-
-### 4.2 معالجة text بدون Python
-
-```bash
-# استخراج سطر بـ grep
-grep "pattern" file.txt || echo "لم يُوجد"
-
-# بحث واستبدال بـ sed
-sed 's/القديم/الجديد/g' file.txt
-
-# طباعة عمود محدد بـ awk
-echo "ahmed 95 pass" | awk '{print $1, $2}'
-
-# عد الأسطر والكلمات
-wc -l < file.txt  # عد الأسطر
-wc -w < file.txt  # عد الكلمات
-
-# أول N سطر / آخر N سطر
-head -10 file.txt
-tail -20 file.txt
-
-# ترتيب وإزالة التكرار
-sort file.txt | uniq -c | sort -rn | head -10
-```
-
-### 4.3 حسابات رياضية
-
-```bash
-# bash arithmetic
-echo $((100 * 3 / 4))
-echo $(( $(date +%s) - 1700000000 ))  # فرق بالثواني
-
-# حسابات دقيقة بـ bc
-echo "scale=4; 22/7" | bc
-echo "scale=2; sqrt(144)" | bc -l
-
-# Python للأرقام الكبيرة
-python3 -c "
-import math
-n = 2**128
-print(f'2^128 = {n:,}')
-print(f'sqrt(2) = {math.sqrt(2):.10f}')
-print(f'pi = {math.pi:.10f}')
-"
-```
-
----
-
-## 5. شبكة وإنترنت
-
-### 5.1 فحص اتصال
-
-```bash
-# ping
-ping -c 3 google.com && echo "✓ الإنترنت يعمل" || echo "✗ لا يوجد اتصال"
-
-# فحص port معين
-nc -zv api.github.com 443 2>&1 && echo "✓ GitHub API متاح"
-
-# فحص DNS
-nslookup api.github.com | tail -3
-
-# اختبار سرعة الاستجابة
-time curl -sf -o /dev/null https://api.github.com
-```
-
-### 5.2 scraping مواقع
-
-```bash
-pip install beautifulsoup4 requests --quiet --break-system-packages
-
-python3 << 'PYEOF'
-import requests
-from bs4 import BeautifulSoup
-
-url = "https://example.com"
-headers = {
-    'User-Agent': 'Mozilla/5.0 (compatible; OFOQ/6.0)',
-    'Accept-Language': 'ar,en;q=0.9'
-}
-
-try:
-    resp = requests.get(url, headers=headers, timeout=20)
-    resp.raise_for_status()
-    
-    soup = BeautifulSoup(resp.text, 'html.parser')
-    
-    # استخراج العنوان
-    print(f"Title: {soup.title.string if soup.title else 'N/A'}")
-    
-    # استخراج كل الروابط
-    links = soup.find_all('a', href=True)
-    print(f"روابط: {len(links)}")
-    for link in links[:5]:
-        print(f"  {link['href']}: {link.text.strip()[:50]}")
-    
-    # استخراج نص معين
-    paragraphs = soup.find_all('p')
-    for p in paragraphs[:3]:
-        print(f"  {p.text.strip()[:100]}")
-        
-except Exception as e:
-    print(f"فشل: {e}")
-PYEOF
-```
-
----
-
-## 6. أنظمة وملفات
-
-### 6.1 معلومات النظام
-
-```bash
-# معلومات أساسية
-echo "=== System Info ==="
-echo "OS: $(cat /etc/os-release | grep PRETTY | cut -d'"' -f2)"
-echo "CPU cores: $(nproc)"
-echo "RAM: $(free -h | grep Mem | awk '{print $2}')"
-echo "Disk: $(df -h / | tail -1 | awk '{print $4}') free"
-echo "Uptime: $(uptime -p)"
-
-# متغيرات البيئة المتاحة
-env | grep -E "GITHUB|RUNNER|HOME|PATH" | sort
-```
-
-### 6.2 إدارة العمليات
-
-```bash
-# تشغيل في الخلفية
-some_command &
-PID=$!
-echo "PID: $PID"
-
-# انتظار انتهاء
-wait $PID
-echo "انتهى بـ exit code: $?"
-
-# timeout لأمر محدد
-timeout 30 long_running_command || echo "انتهت المهلة"
-```
-
-### 6.3 Zip وضغط الملفات
-
-```bash
-# ضغط مجلد
-zip -r /tmp/output.zip /tmp/my_project
-echo "حجم: $(du -sh /tmp/output.zip | cut -f1)"
-
-# فك الضغط
-unzip -o /tmp/output.zip -d /tmp/extracted
-
-# tar
-tar -czf /tmp/backup.tar.gz /tmp/my_project
-tar -xzf /tmp/backup.tar.gz -C /tmp/
-```
-
----
-
-## 7. GitHub API — مرجع سريع
-
-```bash
-TOKEN="ghp_xxx"
-OWNER="myuser"
-REPO="myrepo"
-
-# ── USER ──────────────────────────────────────────────────────
-# معلومات المستخدم
-curl -sf -H "Authorization: token $TOKEN" https://api.github.com/user \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['login'], '|', d['name'], '|', d['public_repos'], 'repos')"
-
-# ── REPOS ─────────────────────────────────────────────────────
-# قائمة الـ repos
-curl -sf -H "Authorization: token $TOKEN" https://api.github.com/user/repos?per_page=50 \
-  | python3 -c "import sys,json; [print(r['name'], r['private']) for r in json.load(sys.stdin)]"
-
-# ── ISSUES ────────────────────────────────────────────────────
-# جلب issues
-curl -sf -H "Authorization: token $TOKEN" \
-  "https://api.github.com/repos/$OWNER/$REPO/issues?state=open" \
-  | python3 -c "import sys,json; [print(f\"#{i['number']} {i['title'][:60]}\") for i in json.load(sys.stdin)]"
-
-# إغلاق issue
-ISSUE_NUMBER=5
-curl -sf -X PATCH \
-  -H "Authorization: token $TOKEN" \
-  -H "Content-Type: application/json" \
-  "https://api.github.com/repos/$OWNER/$REPO/issues/$ISSUE_NUMBER" \
-  -d '{"state":"closed"}'
-
-# ── DISPATCH ──────────────────────────────────────────────────
-# تشغيل workflow يدوياً
-curl -sf -X POST \
-  -H "Authorization: token $TOKEN" \
-  -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/$OWNER/$REPO/dispatches" \
-  -d '{"event_type":"my-event","client_payload":{"key":"value"}}'
-
-# ── CONTENTS ──────────────────────────────────────────────────
-# كتابة/تحديث ملف في repo
-CONTENT=$(echo "محتوى الملف" | base64 -w 0)
-
-# جلب SHA الحالي للملف (مطلوب للتحديث)
-SHA=$(curl -sf -H "Authorization: token $TOKEN" \
-  "https://api.github.com/repos/$OWNER/$REPO/contents/path/to/file.txt" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin).get('sha',''))" 2>/dev/null || echo "")
-
-# إنشاء أو تحديث
-BODY='{"message":"تحديث تلقائي","content":"'"$CONTENT"'"}'
-[[ -n "$SHA" ]] && BODY='{"message":"تحديث تلقائي","content":"'"$CONTENT"'","sha":"'"$SHA"'"}'
-
-curl -sf -X PUT \
-  -H "Authorization: token $TOKEN" \
-  -H "Content-Type: application/json" \
-  "https://api.github.com/repos/$OWNER/$REPO/contents/path/to/file.txt" \
-  -d "$BODY" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('✓', d['content']['path'])"
-```
-
----
-
-## 8. تحديث memory.md — أمثلة صحيحة كاملة
-
-### 8.1 بعد التحقق من GitHub Token
-
-```xml
-<action type="update_memory">
-## CONFIG
-github_token: ghp_abc123
-github_repo_owner: myuser
-github_repo_name: myrepo
-github_status: verified
-github_last_verified: 2025-04-20T10:00:00Z
-
-## TASKS
-null
-
-## SCHEDULES
-null
-
-## RECENT LOG
-2025-04-20 10:00 | github verify | ✅ myuser (12 repos)
-
-## USER PREFERENCES
-null
-
-## NOTES
-null
-</action>
-```
-
-### 8.2 بعد إضافة مهمة مجدولة
-
-```xml
-<action type="update_memory">
-## CONFIG
-github_token: ghp_abc123
-github_repo_owner: myuser
-github_repo_name: myrepo
-github_status: verified
-github_last_verified: 2025-04-20T10:00:00Z
-
-## TASKS
-task_001:
-  title: نشر المحتوى اليومي
-  status: active
-  created: 2025-04-20
-
-## SCHEDULES
-SCHEDULE_001:
-  name: نشر يومي
-  cron: "0 8 * * *"
-  action: نشر المحتوى الجديد من repo ofoq-videos
-  last_run: null
-  next_run: 2025-04-21
-  status: active
-  created: 2025-04-20
-
-## RECENT LOG
-2025-04-20 10:00 | github verify | ✅ myuser (12 repos)
-2025-04-20 10:05 | schedule create | ✅ SCHEDULE_001 - نشر يومي الساعة 8 ص
-
-## USER PREFERENCES
-language: arabic_egyptian
-timezone: Africa/Cairo
-
-## NOTES
-المستخدم يريد النشر صباحاً قبل بدء العمل
-</action>
-```
-
-### 8.3 بعد فشل عملية — سجّل الخطأ
-
-```xml
-<action type="update_memory">
-## CONFIG
-[نفس القيم السابقة]
-
-## TASKS
-[نفس المهام]
-
-## SCHEDULES
-[نفس الجداول]
-
-## RECENT LOG
-2025-04-20 10:00 | github verify | ✅ myuser
-2025-04-20 10:05 | schedule create | ✅ SCHEDULE_001
-2025-04-20 11:00 | youtube upload | ❌ فشل — refresh_token منتهي الصلاحية
-
-## USER PREFERENCES
-language: arabic_egyptian
-
-## NOTES
-YouTube refresh_token انتهت صلاحيته في 2025-04-20
-المستخدم يحتاج إعادة الـ OAuth flow لـ YouTube
-</action>
-```
-
----
-
-## 9. اختبار API ومنصات مختلفة
-
-### 9.1 YouTube Data API v3
-
-```bash
-ACCESS_TOKEN="ya29_xxx"
-
-# رفع فيديو
-python3 << 'PYEOF'
-import requests, json, os
-
-ACCESS_TOKEN = os.environ['YT_TOKEN']
-VIDEO_FILE   = '/tmp/video.mp4'
-
-# الخطوة 1: initiating upload (resumable)
-metadata = {
-    "snippet": {
-        "title": "عنوان الفيديو",
-        "description": "وصف تفصيلي",
-        "tags": ["إسلام", "قرآن"],
-        "categoryId": "22",
-        "defaultLanguage": "ar"
-    },
-    "status": {
-        "privacyStatus": "public",
-        "selfDeclaredMadeForKids": False
-    }
-}
-
-resp = requests.post(
-    'https://www.googleapis.com/upload/youtube/v3/videos',
-    params={'uploadType': 'resumable', 'part': 'snippet,status'},
-    headers={
-        'Authorization': f'Bearer {ACCESS_TOKEN}',
-        'Content-Type': 'application/json',
-        'X-Upload-Content-Type': 'video/mp4'
-    },
-    json=metadata,
-    timeout=30
-)
-
-if resp.status_code == 200:
-    upload_url = resp.headers['Location']
-    print(f"Upload URL: {upload_url[:50]}...")
-    
-    # الخطوة 2: رفع الملف
-    with open(VIDEO_FILE, 'rb') as f:
-        video_data = f.read()
-    
-    upload_resp = requests.put(
-        upload_url,
-        data=video_data,
-        headers={'Content-Type': 'video/mp4'},
-        timeout=300
-    )
-    
-    if upload_resp.status_code in (200, 201):
-        vid_id = upload_resp.json()['id']
-        print(f"✅ تم الرفع: https://youtu.be/{vid_id}")
-    else:
-        print(f"❌ فشل الرفع: {upload_resp.status_code}")
-else:
-    print(f"❌ فشل الـ initiation: {resp.status_code}: {resp.text[:200]}")
-PYEOF
-```
-
-### 9.2 Telegram Bot API
-
-```bash
-BOT_TOKEN="xxx:yyy"
-CHAT_ID="123456789"
-
-# إرسال رسالة نصية
-curl -sf -X POST \
-  "https://api.telegram.org/bot$BOT_TOKEN/sendMessage" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"chat_id\": \"$CHAT_ID\",
-    \"text\": \"✅ تم تنفيذ المهمة بنجاح\",
-    \"parse_mode\": \"HTML\"
-  }" | python3 -c "import sys,json; d=json.load(sys.stdin); print('OK' if d['ok'] else d['description'])"
-
-# إرسال ملف
-curl -sf -X POST \
-  "https://api.telegram.org/bot$BOT_TOKEN/sendDocument" \
-  -F "chat_id=$CHAT_ID" \
-  -F "document=@/tmp/report.pdf" \
-  -F "caption=التقرير اليومي" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('Sent!' if d['ok'] else d['description'])"
-```
-
-### 9.3 Notion API
-
-```bash
-NOTION_TOKEN="secret_xxx"
-DATABASE_ID="yyy"
-
-# إضافة entry لـ database
-curl -sf -X POST \
-  -H "Authorization: Bearer $NOTION_TOKEN" \
-  -H "Notion-Version: 2022-06-28" \
-  -H "Content-Type: application/json" \
-  "https://api.notion.com/v1/pages" \
-  -d "{
-    \"parent\": {\"database_id\": \"$DATABASE_ID\"},
-    \"properties\": {
-      \"Name\": {\"title\": [{\"text\": {\"content\": \"عنوان المهمة\"}}]},
-      \"Status\": {\"select\": {\"name\": \"Done\"}},
-      \"Date\": {\"date\": {\"start\": \"$(date +%Y-%m-%d)\"}}
-    }
-  }" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id','ERROR')[:8])"
-```
-
----
-
-## 10. حساب وقت الصلاة (خاص)
-
-```bash
-python3 << 'PYEOF'
-import math, datetime, zoneinfo
-
-def prayer_times(lat=30.0444, lng=31.2357, date=None):
-    """حساب أوقات الصلاة لأي موقع جغرافي"""
-    if date is None:
-        date = datetime.date.today()
-    
-    D2R = math.pi / 180
-    
-    # Julian Day Number
-    y, m, d = date.year, date.month, date.day
-    JD = (int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + d 
-          - (2 - int(y/100) + int(int(y/100)/4)) - 1524.5)
-    
-    n = JD - 2451545.0
-    L = ((280.460 + 0.9856474 * n) % 360 + 360) % 360
-    g = ((357.528 + 0.9856003 * n) % 360) * D2R
-    lam = (L + 1.915 * math.sin(g) + 0.020 * math.sin(2*g)) * D2R
-    eps = 23.439 * D2R
-    dec = math.asin(math.sin(eps) * math.sin(lam))
-    RA  = math.atan2(math.cos(eps) * math.sin(lam), math.cos(lam))
-    noon_utc = 12 - lng/15 - ((L * D2R - RA) * 12 / math.pi)
-    noon_local = noon_utc + 2  # Cairo UTC+2
-    
-    def time_for_angle(angle_deg):
-        cosH = ((math.sin(angle_deg * D2R) - math.sin(lat * D2R) * math.sin(dec))
-                / (math.cos(lat * D2R) * math.cos(dec)))
-        if abs(cosH) > 1: return None
-        H = math.acos(cosH) * 12 / math.pi
-        return H
-    
-    def fmt(h):
-        if h is None: return "N/A"
-        h = (h % 24 + 24) % 24
-        return f"{int(h):02d}:{int((h - int(h))*60):02d}"
-    
-    fajr_H  = time_for_angle(-18)
-    sunrise_H = time_for_angle(-0.833)
-    sunset_H  = time_for_angle(-0.833)
-    isha_H   = time_for_angle(-17)
-    
-    # Asr (Shafi'i: shadow = length + noon shadow)
-    noon_alt = 90 - abs(lat - math.degrees(dec))
-    asr_factor = math.atan2(1, math.tan(math.radians(noon_alt - 45 if noon_alt > 45 else noon_alt)))
-    asr_H = math.acos((math.sin(asr_factor) - math.sin(lat*D2R)*math.sin(dec))
-                       / (math.cos(lat*D2R)*math.cos(dec))) * 12 / math.pi if abs(
-                       (math.sin(asr_factor) - math.sin(lat*D2R)*math.sin(dec))
-                       / (math.cos(lat*D2R)*math.cos(dec))) <= 1 else None
-    
-    times = {
-        "الفجر":   fmt(noon_local - fajr_H)  if fajr_H else "N/A",
-        "الشروق":  fmt(noon_local - sunrise_H) if sunrise_H else "N/A",
-        "الظهر":   fmt(noon_local),
-        "العصر":   fmt(noon_local + asr_H)    if asr_H else "N/A",
-        "المغرب":  fmt(noon_local + sunset_H) if sunset_H else "N/A",
-        "العشاء":  fmt(noon_local + isha_H)   if isha_H else "N/A",
-    }
-    return times
-
-times = prayer_times()
-print(f"أوقات الصلاة في القاهرة — {datetime.date.today()}")
-for name, time in times.items():
-    print(f"  {name}: {time}")
-PYEOF
-```
-
----
-
-## 11. جدولة المهام — بنية صحيحة
-
-### 11.1 توزيع مواعيد النشر بعد الفجر
-
-```bash
-python3 << 'PYEOF'
-import random, datetime, zoneinfo
-
-def schedule_posts(fajr_time_str, count=4, spread_hours=12):
-    """توزيع مواعيد النشر على مدار اليوم"""
-    cairo = zoneinfo.ZoneInfo('Africa/Cairo')
-    today = datetime.date.today()
-    
-    fh, fm = map(int, fajr_time_str.split(':'))
-    start = datetime.datetime(today.year, today.month, today.day, fh, fm, tzinfo=cairo)
-    
-    # ابدأ 30 دقيقة بعد الفجر
-    start += datetime.timedelta(minutes=30)
-    end = start + datetime.timedelta(hours=spread_hours)
-    
-    total_minutes = int((end - start).total_seconds() / 60)
-    interval = total_minutes // count
-    
-    slots = []
-    for i in range(count):
-        offset = i * interval + random.randint(-10, 10)
-        offset = max(0, min(total_minutes - 1, offset))
-        slot = start + datetime.timedelta(minutes=offset)
-        slots.append(slot)
-    
-    slots.sort()
-    return [s.strftime('%H:%M') for s in slots]
-
-slots = schedule_posts("05:18", count=5)
-print("مواعيد النشر المقترحة:")
-for i, s in enumerate(slots, 1):
-    print(f"  {i}. الساعة {s}")
-PYEOF
-```
-
----
-
-## 13. create_schedule — أمثلة JSON صحيحة كاملة
-
-### 13.1 حكمة يومية الساعة 9 صباحاً
-
-```xml
-<action type="create_schedule">
-{
-  "name": "حكمة يومية",
-  "description": "حكمة عربية أصيلة كل صباح",
-  "cron": "0 9 * * *",
-  "taskPrompt": "اكتب حكمة عربية أصيلة ومختصرة في سطر واحد، ثم اشرحها في سطرين بأسلوب بسيط وعميق.",
-  "timezone": "Africa/Cairo"
-}
-</action>
-```
-
-### 13.2 تقرير أسبوعي كل جمعة الساعة 8 مساءً
-
-```xml
-<action type="create_schedule">
-{
-  "name": "ملخص أسبوعي",
-  "description": "ملخص للأحداث التقنية الأسبوع الماضي",
-  "cron": "0 20 * * 5",
-  "taskPrompt": "اكتب ملخصاً مختصراً لأبرز 5 أحداث في عالم التقنية خلال الأسبوع الماضي. استخدم shell لجلب أخبار حديثة من مصادر موثوقة إذا أمكن.",
-  "timezone": "Africa/Cairo"
-}
-</action>
-```
-
-### 13.3 تذكير بالنشاط كل يومين الساعة 7 صباحاً
-
-```xml
-<action type="create_schedule">
-{
-  "name": "تذكير الصباح",
-  "description": "تذكير بمهام اليوم",
-  "cron": "0 7 */2 * *",
-  "taskPrompt": "اكتب رسالة تحفيزية قصيرة لبدء يوم منتج، ثم ذكّر بـ3 نصائح عملية للتركيز والإنتاجية.",
-  "timezone": "Africa/Cairo"
-}
-</action>
-```
-
-### 13.4 فحص تقني كل ساعة
-
-```xml
-<action type="create_schedule">
-{
-  "name": "فحص دوري",
-  "description": "فحص حالة سيرفر أو API",
-  "cron": "0 * * * *",
-  "taskPrompt": "نفّذ shell لفحص حالة الـ GitHub API وأي سيرفر محفوظ في memory. أبلغ عن الحالة بـ ✅ أو ❌.",
-  "timezone": "Africa/Cairo"
-}
-</action>
-```
-
-### 13.5 cron cheatsheet سريع
-
-| النمط | المعنى |
-|---|---|
-| `0 9 * * *` | كل يوم الساعة 9:00 ص |
-| `30 8 * * *` | كل يوم الساعة 8:30 ص |
-| `0 9 * * 5` | كل جمعة الساعة 9:00 ص |
-| `0 9 * * 1-5` | كل يوم عمل (إثنين–جمعة) |
-| `0 9,18 * * *` | كل يوم 9 ص و6 م |
-| `*/30 * * * *` | كل 30 دقيقة |
-| `0 * * * *` | كل ساعة |
-| `0 9 1 * *` | أول كل شهر الساعة 9 |
-| `0 9 */2 * *` | كل يومين الساعة 9 |
-
-**ملاحظة:** الدقة التقنية لـ scheduler في هذا النظام = كل دقيقة (GitHub Actions `* * * * *`). المهام المحددة بالدقيقة دقيقتها الفعلية ≈ ±1 دقيقة.
-
-```bash
-# ┌─ دقيقة (0-59)
-# │ ┌─ ساعة (0-23)
-# │ │ ┌─ يوم الشهر (1-31)
-# │ │ │ ┌─ شهر (1-12)
-# │ │ │ │ ┌─ يوم الأسبوع (0-6, 0=الأحد)
-# │ │ │ │ │
-# * * * * *
-
-# أمثلة:
-# "0 8 * * *"     كل يوم الساعة 8 صباحاً
-# "0 8 * * 5"     كل جمعة الساعة 8 صباحاً
-# "*/30 * * * *"  كل 30 دقيقة
-# "0 0 1 * *"     أول كل شهر منتصف الليل
-# "0 8,12,18 * * *" كل يوم الساعة 8 و12 و6 مساءً
-
-# التحقق من cron expression
-python3 -c "
-from datetime import datetime
-import zoneinfo
-
-CRON = '0 8 * * *'
-print(f'Cron: {CRON}')
-# يمكن استخدام مكتبة croniter للحسابات الدقيقة
-"
-```
-
----
-
-## 12. تثبيت أدوات متخصصة
-
-### 12.1 ffmpeg — معالجة الوسائط
-
-```bash
-# تثبيت
-sudo apt-get install -y ffmpeg -q
-
-# فحص
-ffmpeg -version | head -1
-
-# تحويل فيديو
-ffmpeg -i input.mp4 -c:v libx264 -crf 23 -c:a aac output.mp4 -y
-
-# استخراج صوت
-ffmpeg -i video.mp4 -vn -acodec mp3 audio.mp3 -y
-
-# thumbnail من فيديو
-ffmpeg -i video.mp4 -ss 00:00:05 -vframes 1 thumbnail.jpg -y
-
-# دمج فيديو وصوت
-ffmpeg -i video_no_audio.mp4 -i audio.mp3 -c:v copy -c:a aac output.mp4 -y
-```
-
-### 12.2 Node.js و npm
-
-```bash
-# فحص
-node --version && npm --version
-
-# تثبيت حزمة
-npm install -g some-package
-
-# تشغيل script صغير
-node -e "
-const https = require('https');
-https.get('https://api.github.com', {headers:{'User-Agent':'OFOQ/6.0'}}, r => {
-  console.log('Status:', r.statusCode);
-}).on('error', e => console.error(e.message));
-"
-```
-
-### 12.3 ImageMagick — معالجة الصور
-
-```bash
-# تثبيت
-sudo apt-get install -y imagemagick -q
-
-# تغيير حجم صورة
-convert input.jpg -resize 1280x720 output.jpg
-
-# إضافة نص على صورة
-convert input.jpg \
-  -font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf \
-  -pointsize 36 \
-  -fill white \
-  -annotate +50+50 "OFOQ Agent" \
-  output.jpg
-
-# تحويل PDF لصور
-convert -density 150 document.pdf -quality 90 page_%03d.jpg
-```
-
----
-
-## نصائح عامة للكود الصحيح في GitHub Actions
-
-```bash
-# ✅ دائماً: set -eo pipefail
-# ✅ دائماً: اطبع نتائج وسيطة للتأكيد
-# ✅ دائماً: تعامل مع الأخطاء صراحةً
-# ✅ دائماً: تحقق من نجاح العملية قبل التالية
-# ✅ دائماً: احفظ في memory بعد أي تغيير مهم
-
-# ❌ لا تخمّن قيم credentials
-# ❌ لا تطبع tokens كاملة في stdout
-# ❌ لا تجمع عمليات غير مترابطة في shell واحد
-# ❌ لا تفترض نجاح أمر بدون التحقق من exit code
-# ❌ لا تعتمد على ترتيب JSON أو ترتيب الـ API results
-
-# نمط التحقق الصحيح:
-command_that_might_fail
-EXIT_CODE=$?
-if [ $EXIT_CODE -ne 0 ]; then
-  echo "FAILED with exit code $EXIT_CODE"
+# صح — تحقق أولاً
+TOKEN="${MY_TOKEN}"
+if [[ -z "$TOKEN" ]]; then
+  echo "TOKEN غير موجود" >&2
   exit 1
 fi
-echo "✓ نجح"
+curl -sf -H "Authorization: token $TOKEN" https://api.example.com
 ```
 
+### A2. التعامل مع أخطاء curl
 ```bash
-TOKEN="TOKEN_HERE"
-curl -sf \
+response=$(curl -sf -w "\n%{http_code}" \
   -H "Authorization: token $TOKEN" \
-  -H "User-Agent: OFOQ/6.0" \
-  https://api.github.com/user \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('login'), d.get('name'), d.get('public_repos'))"
+  "https://api.example.com/endpoint")
+
+http_code=$(echo "$response" | tail -1)
+body=$(echo "$response" | head -n -1)
+
+if [[ "$http_code" != "200" ]]; then
+  echo "HTTP $http_code: $body" >&2
+  exit 1
+fi
+echo "$body"
+```
+
+### A3. عمليات الملفات الأساسية
+```bash
+# قراءة ملف
+cat /path/to/file
+
+# كتابة ملف
+cat > /tmp/output.txt << 'EOF'
+محتوى الملف هنا
+EOF
+
+# فحص وجود ملف
+if [[ -f "/tmp/myfile.txt" ]]; then echo "الملف موجود"; fi
+
+# حجم ملف
+ls -lh /tmp/myfile.txt
+wc -l /tmp/myfile.txt
+```
+
+### A4. معالجة JSON من الـ CLI
+```bash
+# بدون jq — استخدم Python دائماً
+VALUE=$(echo "$JSON_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('key',''))")
+
+# قائمة
+echo "$JSON_RESPONSE" | python3 -c "
+import sys, json
+items = json.load(sys.stdin)
+for item in items:
+    print(item['id'], item['name'])
+"
 ```
 
 ---
 
-## 2. جلب releases من repo
+## SECTION B — Python: كيف تكتب كوداً صحيحاً
 
-```bash
-TOKEN="TOKEN_HERE"
-OWNER="OWNER_HERE"
-REPO="REPO_HERE"
-curl -sf \
-  -H "Authorization: token $TOKEN" \
-  -H "User-Agent: OFOQ/6.0" \
-  "https://api.github.com/repos/$OWNER/$REPO/releases" \
-  | python3 -c "import sys,json; [print(r['tag_name'], r['id']) for r in json.load(sys.stdin)]"
+### B1. الهيكل الصحيح لأي Python script
+```python
+#!/usr/bin/env python3
+import sys, json, os
+from datetime import datetime
+
+# ثوابت
+TIMEOUT = 30
+BASE_URL = "https://api.example.com"
+
+def fetch_data(url: str, token: str) -> dict:
+    """جلب البيانات من API مع معالجة الأخطاء"""
+    import urllib.request
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": f"token {token}", "User-Agent": "OFOQ/6.0"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        print(f"HTTP {e.code}: {e.reason}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"خطأ: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def main():
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if not token:
+        print("GITHUB_TOKEN غير موجود", file=sys.stderr)
+        sys.exit(1)
+    data = fetch_data(f"{BASE_URL}/user", token)
+    print(json.dumps(data, ensure_ascii=False, indent=2))
+
+if __name__ == "__main__":
+    main()
 ```
 
----
+### B2. HTTP requests — بدون pip (stdlib فقط)
+```python
+import urllib.request, urllib.parse, json
 
-## 3. جلب assets من release pending
+def http_get(url, headers=None):
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode('utf-8'))
 
-```bash
-TOKEN="TOKEN_HERE"
-OWNER="OWNER_HERE"
-REPO="REPO_HERE"
-RELEASE_ID=$(curl -sf \
-  -H "Authorization: token $TOKEN" \
-  -H "User-Agent: OFOQ/6.0" \
-  "https://api.github.com/repos/$OWNER/$REPO/releases" \
-  | python3 -c "import sys,json; rs=json.load(sys.stdin); r=next((x for x in rs if x['tag_name']=='pending'),None); print(r['id'] if r else '')")
-echo "Release ID: $RELEASE_ID"
-curl -sf \
-  -H "Authorization: token $TOKEN" \
-  -H "User-Agent: OFOQ/6.0" \
-  "https://api.github.com/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets" \
-  | python3 -c "import sys,json; [print(a['name'], a['size'], a['browser_download_url']) for a in json.load(sys.stdin)]"
+def http_post(url, data, headers=None):
+    body = json.dumps(data).encode('utf-8')
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "application/json", **(headers or {})}
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode('utf-8'))
 ```
 
----
-
-## 4. تجديد YouTube Access Token
-
+### B3. HTTP requests — مع requests library
 ```bash
-curl -sf -X POST https://oauth2.googleapis.com/token \
-  -d "client_id=CLIENT_ID" \
-  -d "client_secret=SECRET" \
-  -d "refresh_token=REFRESH_TOKEN" \
-  -d "grant_type=refresh_token" \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('access_token:', d.get('access_token','FAILED')[:30])"
+pip install requests --quiet --break-system-packages
+```
+```python
+import requests
+
+session = requests.Session()
+session.headers.update({"Authorization": f"token {TOKEN}", "User-Agent": "OFOQ/6.0"})
+
+# GET
+resp = session.get("https://api.github.com/user", timeout=30)
+resp.raise_for_status()
+user = resp.json()
+print(user['login'])
+
+# POST
+resp = session.post(
+    "https://api.github.com/repos/owner/repo/releases",
+    json={"tag_name": "v1.0", "name": "Release 1.0"},
+    timeout=30,
+)
+resp.raise_for_status()
+print(f"Release ID: {resp.json()['id']}")
 ```
 
----
+### B4. معالجة الأخطاء بشكل صحيح
+```python
+import sys, traceback
 
-## 5. حساب وقت الفجر
+# لا تكتب except: pass أبداً
+try:
+    result = risky_operation()
+except FileNotFoundError as e:
+    print(f"الملف غير موجود: {e}", file=sys.stderr)
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"JSON غير صالح: {e}", file=sys.stderr)
+    sys.exit(1)
+except Exception as e:
+    print(f"خطأ غير متوقع: {type(e).__name__}: {e}", file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
+```
 
-```bash
-python3 << 'PYEOF'
-import math, datetime
+### B5. العمل مع الوقت والتاريخ
+```python
+from datetime import datetime, timedelta, timezone
+import math
 
+# الوقت الحالي
+now_utc   = datetime.now(timezone.utc)
+now_cairo = datetime.now(timezone(timedelta(hours=2)))
+print(f"الوقت (القاهرة): {now_cairo.strftime('%Y-%m-%d %H:%M')}")
+
+# timestamp ISO 8601
+timestamp = datetime.now(timezone.utc).isoformat()
+
+# حساب وقت الفجر
 def calc_fajr(lat=30.0444, lng=31.2357):
-    d = datetime.date.today()
-    D2R = math.pi/180
+    D2R = math.pi / 180
+    d = datetime.now()
     JD = int(365.25*(d.year+4716)) + int(30.6001*(d.month+1)) + d.day - 1524.5
-    n = JD - 2451545.0
-    L = ((280.460+0.9856474*n)%360+360)%360
-    g = ((357.528+0.9856003*n)%360)*D2R
-    lam = (L+1.915*math.sin(g)+0.020*math.sin(2*g))*D2R
-    eps = 23.439*D2R
-    dec = math.asin(math.sin(eps)*math.sin(lam))
+    n  = JD - 2451545.0
+    L  = ((280.460 + 0.9856474 * n) % 360 + 360) % 360
+    g  = ((357.528 + 0.9856003 * n) % 360) * D2R
+    lam = (L + 1.915*math.sin(g) + 0.020*math.sin(2*g)) * D2R
+    eps = 23.439 * D2R
+    dec = math.asin(math.sin(eps) * math.sin(lam))
     RA  = math.atan2(math.cos(eps)*math.sin(lam), math.cos(lam))
-    noon = 12 - lng/15 - ((L*D2R-RA)*12/math.pi) + 2
-    cosH = (math.sin(-18*D2R)-math.sin(lat*D2R)*math.sin(dec))/(math.cos(lat*D2R)*math.cos(dec))
-    if abs(cosH)>1: return None
-    ft = ((noon-math.acos(cosH)*12/math.pi)%24+24)%24
-    hh,mm = int(ft), int((ft-int(ft))*60)
+    noon = 12 - lng/15 - ((L*D2R - RA)*12/math.pi) + 2
+    cosH = (math.sin(-18*D2R) - math.sin(lat*D2R)*math.sin(dec)) / (math.cos(lat*D2R)*math.cos(dec))
+    if abs(cosH) > 1: return None
+    ft = ((noon - math.acos(cosH)*12/math.pi) % 24 + 24) % 24
+    hh, mm = int(ft), int((ft - int(ft)) * 60)
     return f"{hh:02d}:{mm:02d}"
 
-print("Fajr:", calc_fajr())
-PYEOF
+print("الفجر:", calc_fajr())
 ```
 
----
-
-## 6. توزيع مواعيد النشر
-
-```bash
-python3 << 'PYEOF'
+### B6. جدولة وتوزيع المواعيد
+```python
 import random
 
-def make_slots(start_h, start_m, count):
-    s = start_h*60+start_m
-    e = 23*60
-    if s >= e: s = 6*60+30
-    base = (e-s)//max(count,1)
+def make_schedule(start_hour, start_min, count, spread_hours=16):
+    """توزيع count موعد على spread_hours ساعة"""
+    start_mins = start_hour * 60 + start_min
+    end_mins   = min(start_mins + spread_hours * 60, 23 * 60)
+    if count <= 0: return []
+    base_gap = (end_mins - start_mins) // count
     slots = []
     for i in range(count):
-        t = min(e-1, max(s, s+i*base+random.randint(-8,8)))
+        t = start_mins + i * base_gap + random.randint(-5, 5)
+        t = max(start_mins, min(end_mins - 1, t))
         slots.append(f"{t//60:02d}:{t%60:02d}")
     return sorted(slots)
 
-# مثال: بعد الفجر 5:18 بـ 30 دقيقة، 4 مواعيد
-for s in make_slots(5, 48, 4): print(s)
-PYEOF
+# مثال: 4 مواعيد بعد الفجر 30 دقيقة
+slots = make_schedule(5, 48, count=4)
+for s in slots: print(s)
+```
+
+### B7. العمل مع الملفات
+```python
+import json, os
+
+# قراءة JSON
+with open("/tmp/data.json", "r", encoding="utf-8") as f:
+    data = json.load(f)
+
+# كتابة JSON
+with open("/tmp/output.json", "w", encoding="utf-8") as f:
+    json.dump(data, f, ensure_ascii=False, indent=2)
+
+# كتابة نص عربي
+with open("/tmp/arabic.txt", "w", encoding="utf-8") as f:
+    f.write("بسم الله الرحمن الرحيم\n")
+
+# متغيرات البيئة
+API_KEY = os.environ.get("API_KEY")
+if not API_KEY:
+    raise EnvironmentError("API_KEY not set")
+```
+
+### B8. المعالجة المتوازية
+```python
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+def process_item(item):
+    return {"item": item, "result": "done"}
+
+items = ["item1", "item2", "item3", "item4"]
+
+with ThreadPoolExecutor(max_workers=4) as executor:
+    futures = {executor.submit(process_item, i): i for i in items}
+    for future in as_completed(futures):
+        item = futures[future]
+        try:
+            result = future.result()
+            print(f"{item}: {result}")
+        except Exception as e:
+            print(f"{item} فشل: {e}")
+```
+
+### B9. API مع Retry تلقائي
+```python
+import time, urllib.request, json
+
+def api_call_with_retry(url, headers, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.loads(r.read().decode())
+        except Exception as e:
+            wait = 2 ** attempt
+            print(f"محاولة {attempt+1}/{max_retries} فشلت: {e}. انتظار {wait}s...")
+            if attempt < max_retries - 1:
+                time.sleep(wait)
+            else:
+                raise
 ```
 
 ---
 
-## 7. تثبيت مكتبة Python واستخدامها
+## SECTION C — GitHub API
 
+### C1. التحقق من Token
 ```bash
-pip install requests --quiet
-python3 -c "
-import requests
-r = requests.get('https://api.github.com', headers={'User-Agent':'OFOQ/6.0'})
-print('GitHub API status:', r.status_code)
+RESULT=$(curl -sf -H "Authorization: token $TOKEN" -H "User-Agent: OFOQ/6.0" "https://api.github.com/user")
+LOGIN=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('login','FAILED'))")
+echo "GitHub login: $LOGIN"
+```
+
+### C2. جلب Releases
+```bash
+curl -sf -H "Authorization: token $TOKEN" -H "User-Agent: OFOQ/6.0" \
+  "https://api.github.com/repos/$OWNER/$REPO/releases" \
+  | python3 -c "
+import sys, json
+for r in json.load(sys.stdin):
+    print(f\"{r['tag_name']:<15} {r['id']:<12} {r['name']}\")
+"
+```
+
+### C3. إنشاء Release
+```bash
+curl -sf -X POST \
+  -H "Authorization: token $TOKEN" -H "User-Agent: OFOQ/6.0" \
+  -H "Content-Type: application/json" \
+  "https://api.github.com/repos/$OWNER/$REPO/releases" \
+  -d "{\"tag_name\":\"v1.0\",\"name\":\"Release v1.0\",\"draft\":false}" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('ID:', d['id'], 'URL:', d.get('html_url',''))"
+```
+
+### C4. رفع Asset لـ Release
+```bash
+curl -sf -X POST \
+  -H "Authorization: token $TOKEN" -H "Content-Type: video/mp4" \
+  --data-binary @"/tmp/video.mp4" \
+  "https://uploads.github.com/repos/$OWNER/$REPO/releases/$RELEASE_ID/assets?name=video.mp4" \
+  | python3 -c "import sys,json; print('URL:', json.load(sys.stdin).get('browser_download_url',''))"
+```
+
+### C5. تشغيل Workflow
+```bash
+curl -sf -X POST \
+  -H "Authorization: token $TOKEN" -H "Accept: application/vnd.github.v3+json" \
+  "https://api.github.com/repos/$OWNER/$REPO/dispatches" \
+  -d '{"event_type":"my-event","client_payload":{"key":"value"}}'
+```
+
+### C6. قراءة ملف من repo
+```bash
+curl -sf -H "Authorization: token $TOKEN" -H "User-Agent: OFOQ/6.0" \
+  "https://api.github.com/repos/$OWNER/$REPO/contents/path/to/file.txt" \
+  | python3 -c "
+import sys, json, base64
+d = json.load(sys.stdin)
+print(base64.b64decode(d['content']).decode('utf-8')[:500])
 "
 ```
 
 ---
 
-## 8. تنزيل ملف وفحصه
+## SECTION D — YouTube API
 
+### D1. تجديد Access Token
 ```bash
-URL="DOWNLOAD_URL_HERE"
-TOKEN="TOKEN_HERE"
-curl -sL \
-  -H "Authorization: token $TOKEN" \
-  -H "User-Agent: OFOQ/6.0" \
-  -o /tmp/downloaded_file \
-  "$URL"
-ls -lh /tmp/downloaded_file
-file /tmp/downloaded_file
+NEW_TOKEN=$(curl -sf -X POST "https://oauth2.googleapis.com/token" \
+  -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
+  -d "refresh_token=$REFRESH_TOKEN" -d "grant_type=refresh_token" \
+  | python3 -c "import sys,json; t=json.load(sys.stdin).get('access_token',''); print(t if t else 'FAILED')")
+
+[[ "$NEW_TOKEN" == "FAILED" ]] && { echo "فشل تجديد YouTube token" >&2; exit 1; }
+echo "Token: ${NEW_TOKEN:0:20}..."
 ```
 
 ---
 
-## تنسيق update_memory الصحيح — مثال كامل
+## SECTION E — عمليات النظام
 
-بعد التحقق من GitHub token يكون الـ update_memory:
+### E1. فحص الموارد
+```bash
+free -h                                # RAM
+df -h /                                # قرص
+nproc                                  # عدد cores
+date "+%Y-%m-%d %H:%M:%S"             # الوقت
+```
 
+### E2. تثبيت الحزم
+```bash
+pip install requests pandas --quiet --break-system-packages
+sudo apt-get install -y ffmpeg --quiet
+npm install axios --save-quiet
+```
+
+---
+
+## SECTION F — Git Operations
+
+```bash
+git clone "https://$TOKEN@github.com/$OWNER/$REPO.git" /tmp/myrepo
+cd /tmp/myrepo
+git config user.email "agent@ofoq.app"
+git config user.name "OFOQ Agent"
+git add -A
+git commit -m "feat: تحديث تلقائي من OFOQ Agent"
+git push origin main
+```
+
+---
+
+## SECTION G — Quran & Islamic APIs
+
+```bash
+# جلب آية
+curl -sf "https://api.alquran.cloud/v1/ayah/1:1/ar.alafasy" \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)['data']
+print(d['text'])
+print(f\"سورة {d['surah']['name']} — الآية {d['numberInSurah']}\")
+"
+
+# جلب سورة كاملة
+curl -sf "https://api.alquran.cloud/v1/surah/1" \
+  | python3 -c "
+import sys, json
+for a in json.load(sys.stdin)['data']['ayahs']:
+    print(f\"{a['numberInSurah']}. {a['text']}\")
+"
+```
+
+---
+
+## SECTION H — حل المشكلات والـ Debugging
+
+### H1. تشخيص خطأ shell
+```bash
+bash -x /tmp/myscript.sh 2>&1 | head -50  # verbose
+echo "Exit code: $?"                        # آخر exit code
+curl -v "https://api.example.com" 2>&1 | head -40  # verbose curl
+```
+
+### H2. تشخيص Python
+```python
+import traceback
+try:
+    result = risky_operation()
+except Exception as e:
+    print(f"خطأ: {type(e).__name__}: {e}", file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
+```
+
+### H3. استراتيجية "افحص قبل تنفذ"
+```bash
+# افحص أولاً
+ITEM=$(curl -sf "https://api.example.com/item/123")
+echo "ستحذف: $ITEM"
+# ثم نفّذ
+curl -X DELETE "https://api.example.com/item/123"
+```
+
+---
+
+## SECTION I — مهام متعددة الخطوات
+
+### I1. نمط: جمع → خطة → تنفيذ → تحقق
+```
+shell (1): اقرأ الحالة الحالية
+shell (2): أنشئ خطة بناءً على النتائج
+update_memory: احفظ الخطة
+shell (3): نفّذ الخطة
+shell (4): تحقق من النتائج
+update_memory: سجّل ما حدث
+```
+
+### I2. معالجة قائمة
+```python
+items = ["item1", "item2", "item3"]
+results = []
+
+for i, item in enumerate(items, 1):
+    print(f"معالجة {i}/{len(items)}: {item}")
+    try:
+        result = process(item)
+        results.append({"item": item, "status": "ok"})
+        print(f"  تم")
+    except Exception as e:
+        results.append({"item": item, "status": "error", "error": str(e)})
+        print(f"  خطأ: {e}")
+
+ok    = sum(1 for r in results if r['status'] == 'ok')
+error = sum(1 for r in results if r['status'] == 'error')
+print(f"النتيجة: {ok} نجح، {error} فشل")
+```
+
+---
+
+## SECTION J — أنماط update_memory
+
+### J1. متى تحدّث الذاكرة؟
+- بعد أي تحقق ناجح (token، API، إلخ)
+- بعد إنشاء مهمة أو جدول جديد
+- عند تلقي معلومات جديدة من المستخدم
+- بعد اكتمال أي مهمة مهمة
+
+### J2. القالب الكامل — اكتبه كاملاً دائماً
 ```
 <action type="update_memory">
 ## CONFIG
-github_token: ghp_abc123
-github_repo_owner: myuser
-github_repo_name: ofoq-videos
-github_status: verified
-github_last_verified: 2025-04-20T10:00:00Z
-youtube_client_id: null
-youtube_client_secret: null
-youtube_refresh_token: null
-youtube_access_token: null
-youtube_status: not_configured
-youtube_last_verified: null
-settings_lat: 30.0444
-settings_lng: 31.2357
-settings_fajr_offset_min: 30
-settings_posts_per_day: 4
+# إعدادات المنصات والمفاتيح
 
-## DAILY PLAN
-date: null
-fajr: null
-status: idle
-published: 0
-total: 0
-slots: null
+## TASKS
+# المهام المطلوبة من المستخدم
+# اكتب هنا الطلبات والأهداف
 
-## SCHEDULES
-null
+## SCHEDULE
+# الجداول والمواعيد المتكررة
+
+## CONTEXT
+# معلومات سياقية مهمة يجب تذكرها
 
 ## RECENT LOG
-2025-04-20 10:00 | github verify | ✅ myuser (12 repos)
+2025-04-20 14:30 | عملية | نتيجة
+2025-04-20 14:31 | عملية | نتيجة
 
-## UPLOADED FILES
-null
+## NOTES
+# ملاحظات وتذكيرات
 </action>
 ```
 
-**ملاحظة:** اكتب الملف كاملاً دائماً — حتى الـ sections اللي ما اتغيرتش.
+### J3. حفظ معلومات المستخدم
+```
+## TASKS
+- المستخدم يريد نشر 4 فيديوهات يومياً بعد الفجر
+- جدولة أسبوعية كل أحد لمراجعة الأداء
+- تنبيه عند انتهاء الـ token
+
+## CONTEXT
+user_name: أحمد
+user_timezone: Africa/Cairo
+user_language: Arabic
+preferred_schedule: after_fajr
+```
+
+---
+
+## SECTION K — أمثلة end-to-end
+
+### K1. تقرير يومي كامل
+```bash
+python3 << 'PYEOF'
+import urllib.request, json
+from datetime import datetime
+
+req = urllib.request.Request(
+    "https://api.github.com/repos/OWNER/REPO/releases",
+    headers={"Authorization": "token TOKEN", "User-Agent": "OFOQ/6.0"}
+)
+with urllib.request.urlopen(req, timeout=30) as r:
+    releases = json.loads(r.read().decode())
+
+report = {
+    "date": datetime.now().strftime("%Y-%m-%d"),
+    "total_releases": len(releases),
+    "latest": releases[0]['tag_name'] if releases else "لا يوجد",
+}
+
+print(json.dumps(report, ensure_ascii=False, indent=2))
+PYEOF
+```
+
+### K2. سكريبت نشر كامل مع فحوصات
+```bash
+#!/bin/bash
+set -eo pipefail
+
+# فحص المدخلات
+[[ -z "$TOKEN" ]] && { echo "TOKEN مفقود" >&2; exit 1; }
+[[ -z "$OWNER" ]] && { echo "OWNER مفقود" >&2; exit 1; }
+
+# فحص GitHub
+echo "فحص GitHub Token..."
+LOGIN=$(curl -sf -H "Authorization: token $TOKEN" "https://api.github.com/user" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('login','FAILED'))")
+[[ "$LOGIN" == "FAILED" ]] && { echo "Token غير صالح" >&2; exit 1; }
+echo "GitHub: $LOGIN"
+
+# إنشاء Release
+echo "إنشاء Release..."
+RELEASE_ID=$(curl -sf -X POST \
+  -H "Authorization: token $TOKEN" -H "Content-Type: application/json" \
+  "https://api.github.com/repos/$OWNER/$REPO/releases" \
+  -d "{\"tag_name\":\"v$(date +%Y%m%d%H%M)\",\"name\":\"فيديو $(date '+%Y-%m-%d')\"}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+echo "Release ID: $RELEASE_ID"
+```
+
+---
+
+## SECTION L — أمان الكود
+
+```bash
+# لا تطبع tokens
+# خطأ:
+echo "Token: $GITHUB_TOKEN"
+
+# صح — فقط أول 6 حروف
+echo "Token: ${GITHUB_TOKEN:0:6}..."
+
+# لا تضع credentials في ملفات الكود
+# استخدم environment variables دائماً
+TOKEN="${GITHUB_TOKEN}"
+```
+
+---
+
+## SECTION M — معلومات بيئة GitHub Actions
+
+```bash
+# Ubuntu 22.04 — الأدوات المتاحة:
+python3 --version    # Python 3.10+
+node --version       # Node.js 20
+npm --version
+git --version
+curl --version
+ffmpeg -version      # مثبّت بالفعل
+jq --version        # مثبّت بالفعل
+
+# متغيرات البيئة التلقائية
+echo $GITHUB_WORKSPACE   # مجلد الكود
+echo $RUNNER_TEMP         # مجلد مؤقت
+```
+
+---
+
+## ملخص سريع
+
+| المهمة | الأمر |
+|--------|-------|
+| تحقق GitHub | `curl -sf -H "Authorization: token $T" https://api.github.com/user` |
+| تحليل JSON | `\| python3 -c "import sys,json; print(json.load(sys.stdin)['key'])"` |
+| كتابة ملف | `cat > /tmp/file.txt << 'EOF' ... EOF` |
+| تثبيت Python pkg | `pip install pkg --quiet --break-system-packages` |
+| الوقت الحالي | `date "+%Y-%m-%d %H:%M:%S"` |
+| تنزيل ملف | `curl -sfL -o /tmp/file URL` |
+| تشغيل Python heredoc | `python3 << 'PYEOF' ... PYEOF` |
+
+---
+*OFOQ Agent v6.0 — دليل شامل لكل المهام*
+
+---
+
+## SECTION P — schedule_task Action (الجدولة التلقائية)
+
+> هذا action مُبرمَج في tools.js مباشرة — لا يحتاج shell
+
+### P1. متى تستخدم schedule_task؟
+- المستخدم يطلب شيئاً متكرراً: "كل يوم"، "كل أسبوع"، "يومياً"، "أسبوعياً"
+- أمثلة: آية يومية، حديث أسبوعي، تقرير، نشر، تذكير، أي مهمة دورية
+
+### P2. الصياغة الصحيحة
+```xml
+<action type="schedule_task">
+{
+  "title": "عنوان قصير يظهر في الـ sidebar",
+  "message": "الرسالة الكاملة التي ستُرسَل للـ agent كل مرة",
+  "schedule_type": "daily",
+  "hour": 9,
+  "minute": 0,
+  "timezone": "Africa/Cairo",
+  "days": ["sat","sun","mon","tue","wed","thu","fri"]
+}
+</action>
+```
+
+### P3. قيم schedule_type
+```
+"daily"   → كل يوم في الأيام المحددة
+"weekly"  → كل أسبوع في الأيام المحددة
+"hourly"  → كل ساعة (نادراً — استخدم بحذر)
+```
+
+### P4. أمثلة عملية
+```xml
+<!-- آية قرآنية يومياً الساعة 7 صباحاً -->
+<action type="schedule_task">
+{
+  "title": "آية قرآنية يومية",
+  "message": "أرسل لي آية قرآنية عشوائية من القرآن الكريم مع تفسيرها ومعناها باختصار",
+  "schedule_type": "daily",
+  "hour": 7,
+  "minute": 0,
+  "days": ["sat","sun","mon","tue","wed","thu","fri"]
+}
+</action>
+
+<!-- حديث نبوي كل جمعة الساعة 12 -->
+<action type="schedule_task">
+{
+  "title": "حديث جمعة",
+  "message": "أرسل لي حديثاً نبوياً شريفاً مع شرحه",
+  "schedule_type": "weekly",
+  "hour": 12,
+  "minute": 0,
+  "days": ["fri"]
+}
+</action>
+
+<!-- تقرير GitHub يومي أيام الأسبوع -->
+<action type="schedule_task">
+{
+  "title": "تقرير GitHub اليومي",
+  "message": "افحص آخر commits وissues في repo الرئيسي وأعطني ملخصاً يومياً",
+  "schedule_type": "daily",
+  "hour": 8,
+  "minute": 30,
+  "days": ["sun","mon","tue","wed","thu"]
+}
+</action>
+```
+
+### P5. إلغاء مهمة
+```xml
+<action type="cancel_task" task_id="task_1234567890_abc1">
+</action>
+```
+- `task_id` يكون في نتيجة schedule_task الناجحة
+- يوقف المهمة (active=false) بدون حذفها — المستخدم يقدر يعيد تفعيلها من الـ sidebar
+
+### P6. الرد بعد الجدولة
+بعد نجاح schedule_task، اكتب للمستخدم:
+```
+تم جدولة مهمة "آية قرآنية يومية" بنجاح ✅
+
+التفاصيل:
+- التوقيت: كل يوم الساعة 7:00 صباحاً (القاهرة)
+- الأيام: كل أيام الأسبوع
+- أول تنفيذ: غداً 7:00 صباحاً
+- المهمة ستظهر في الـ sidebar تحت "المهام المجدولة"
+
+كل يوم في الوقت المحدد سيُنشئ النظام محادثة جديدة تلقائياً بالآية والتفسير.
+```

@@ -1,6 +1,5 @@
-// tools.js — OFOQ Agent v6.0
-// Code Execution Sandbox + Memory Helpers + Logging
-// helpers.js مدمج هنا
+// tools.js — OFOQ Agent v6.1
+// Code Execution Sandbox + Memory + Conversations + Scheduled Tasks
 
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from 'fs';
 import { execSync }           from 'child_process';
@@ -9,8 +8,8 @@ import { join, dirname, resolve } from 'path';
 import { fileURLToPath }      from 'url';
 
 const __dirname   = dirname(fileURLToPath(import.meta.url));
-const PROJECT_DIR  = resolve(__dirname, '..');         // project root
-const SKILLS_DIR   = join(PROJECT_DIR, 'skills');      // soul.md, tools.md, memory.md
+const PROJECT_DIR  = resolve(__dirname, '..');
+const SKILLS_DIR   = join(PROJECT_DIR, 'skills');
 
 // ================================================================
 // LOGGING
@@ -37,21 +36,12 @@ export function sanitize(obj) {
 // ================================================================
 // FILE HELPERS
 // ================================================================
-// قراءة ملف من skills/ (soul.md, tools.md, memory.md)
 export function readSkill(filename) {
-  try {
-    return readFileSync(join(SKILLS_DIR, filename), 'utf8');
-  } catch {
-    log('error', 'tools', `Could not read skills/${filename}`);
-    return '';
-  }
+  try { return readFileSync(join(SKILLS_DIR, filename), 'utf8'); }
+  catch { log('error', 'tools', `Could not read skills/${filename}`); return ''; }
 }
-
-// backward-compat alias
 export const readMd = readSkill;
-
 export function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
 export function cairoDate() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
 }
@@ -59,16 +49,10 @@ export function cairoDate() {
 // ================================================================
 // FIREBASE
 // ================================================================
-
-// ← ضع Firebase Service Account هنا مؤقتاً (انقله لـ GitHub Secret لاحقاً)
-const FIREBASE_SA_HARDCODED = process.env.FIREBASE_SERVICE_ACCOUNT || JSON.stringify({
-  _placeholder: true,
-  // مثال: "type":"service_account","project_id":"...","private_key":"...","client_email":"..."
-});
+const FIREBASE_SA_HARDCODED = process.env.FIREBASE_SERVICE_ACCOUNT || JSON.stringify({ _placeholder: true });
 
 let _db = null;
-
-async function getDb() {
+export async function getDb() {
   if (_db) return _db;
   const { initializeApp, cert, getApps } = await import('firebase-admin/app');
   const { getFirestore } = await import('firebase-admin/firestore');
@@ -76,48 +60,40 @@ async function getDb() {
     let sa;
     try   { sa = JSON.parse(FIREBASE_SA_HARDCODED); }
     catch { throw new Error('FIREBASE_SERVICE_ACCOUNT JSON غير صالح'); }
-    if (sa._placeholder) throw new Error('ضع Firebase Service Account في FIREBASE_SA_HARDCODED أو GitHub Secret');
+    if (sa._placeholder) throw new Error('ضع Firebase Service Account في GitHub Secret');
     initializeApp({ credential: cert(sa) });
   }
   _db = getFirestore();
   return _db;
 }
 
-// ── Memory (memory.md كاملاً في Firestore) ────────────────────────
-// يُحمَّل مع كل رسالة بغض النظر عن الـ conversation
-// يُحفَظ كنص كامل — لا sections، لا partial update
-
+// ================================================================
+// MEMORY
+// ================================================================
 export async function loadMemory(uid) {
   try {
     const db  = await getDb();
     const doc = await db.doc(`users/${uid}/config/memory`).get();
     if (doc.exists && doc.data()?.content) return doc.data().content;
-    // مستخدم جديد → template من skills/memory.md
     const template = readSkill('memory.md');
-    if (template) await saveMemory(uid, template); // init في Firestore
+    if (template) await saveMemory(uid, template);
     return template || '';
   } catch (e) {
     log('error', 'memory', 'loadMemory failed', { error: e.message });
-    return readSkill('memory.md'); // fallback محلي
+    return readSkill('memory.md');
   }
 }
 
-// حفظ memory.md كاملاً — AI يكتب الملف بالكامل دايماً
 export async function saveMemory(uid, fullContent) {
   try {
     const db = await getDb();
     await db.doc(`users/${uid}/config/memory`).set({
-      content:    fullContent,
-      updated_at: new Date().toISOString(),
+      content: fullContent, updated_at: new Date().toISOString(),
     });
-    log('ok', 'memory', `memory saved — uid=${uid.slice(0,8)} (${fullContent.length}ch)`);
-  } catch (e) {
-    log('error', 'memory', 'saveMemory failed', { error: e.message });
-    throw e;
-  }
+    log('ok', 'memory', `saved (${fullContent.length}ch)`);
+  } catch (e) { log('error', 'memory', 'saveMemory failed', { error: e.message }); throw e; }
 }
 
-// قراءة قيمة محددة من نص memory.md
 export function getMemVal(mem, key) {
   const line = mem.split('\n').find(l => l.startsWith(`${key}:`));
   if (!line) return null;
@@ -125,22 +101,19 @@ export function getMemVal(mem, key) {
   return (val === 'null' || val === '') ? null : val;
 }
 
-// ── Conversations ─────────────────────────────────────────────────
-// كل محادثة = document في users/{uid}/conversations/{convId}
-// يحتوي على history كامل + thinking + tool_updates + final_response
-
-export async function createConv(uid, convId, userMessage, history = []) {
+// ================================================================
+// CONVERSATIONS
+// ================================================================
+export async function createConv(uid, convId, userMessage, history = [], extra = {}) {
   try {
     const db = await getDb();
     await db.doc(`users/${uid}/conversations/${convId}`).set({
-      status:          'pending',
-      created_at:      new Date().toISOString(),
-      user_message:    userMessage,
-      history,                    // كل الـ history السابق
-      thinking_chunks: [],
-      tool_updates:    [],
-      final_response:  null,
-      error:           null,
+      status: 'pending', created_at: new Date().toISOString(),
+      user_message: userMessage, history,
+      thinking_chunks: [], tool_updates: [],
+      final_response: null, error: null,
+      title: userMessage.slice(0, 60),
+      ...extra,
     });
   } catch (e) { log('error', 'conv', 'createConv failed', { error: e.message }); }
 }
@@ -177,284 +150,160 @@ export async function appendToConv(uid, convId, field, value) {
   } catch (e) { log('warn', 'conv', `append ${field} failed`, { error: e.message }); }
 }
 
-// قراءة ملف مرفوع من Firestore
-export async function readUploadedFile(uid, fileId) {
+// ================================================================
+// SCHEDULED TASKS
+// ================================================================
+// الهيكل في Firestore: users/{uid}/scheduled_tasks/{taskId}
+// الـ scheduler.js يقرأ بـ collectionGroup('scheduled_tasks')
+
+/**
+ * حساب next_run القادمة
+ * @param {object} config - { schedule_type, hour, minute, timezone, days }
+ * @returns {string} ISO timestamp UTC
+ */
+export function calcNextRun(config) {
+  const { schedule_type = 'daily', hour = 9, minute = 0,
+          days = ['sat','sun','mon','tue','wed','thu','fri'] } = config;
+
+  // الوقت الحالي بتوقيت القاهرة (UTC+2 — تقريب ثابت)
+  const CAIRO_OFFSET_MS = 2 * 3600 * 1000;
+  const nowUtc   = Date.now();
+  const nowCairo = new Date(nowUtc + CAIRO_OFFSET_MS);
+
+  if (schedule_type === 'daily' || schedule_type === 'weekly') {
+    // ابحث عن أقرب يوم تنطبق عليه الشروط
+    const DAY_NAMES = ['sun','mon','tue','wed','thu','fri','sat'];
+    let candidate = new Date(nowCairo);
+    candidate.setHours(hour, minute, 0, 0);
+
+    for (let i = 0; i < 8; i++) {
+      const dayName = DAY_NAMES[candidate.getDay()];
+      const inFuture = candidate.getTime() > nowCairo.getTime();
+      if (inFuture && days.includes(dayName)) {
+        // تحويل لـ UTC
+        const utcMs = candidate.getTime() - CAIRO_OFFSET_MS;
+        return new Date(utcMs).toISOString();
+      }
+      candidate.setDate(candidate.getDate() + 1);
+      candidate.setHours(hour, minute, 0, 0);
+    }
+  }
+
+  if (schedule_type === 'hourly') {
+    const next = new Date(nowUtc + 3600 * 1000);
+    next.setMinutes(minute, 0, 0);
+    return next.toISOString();
+  }
+
+  // default: بكرة نفس الوقت
+  const next = new Date(nowCairo);
+  next.setDate(next.getDate() + 1);
+  next.setHours(hour, minute, 0, 0);
+  return new Date(next.getTime() - CAIRO_OFFSET_MS).toISOString();
+}
+
+/**
+ * إنشاء مهمة مجدولة جديدة
+ */
+export async function createScheduledTask(uid, config) {
+  const db     = await getDb();
+  const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const nextRun = calcNextRun(config);
+
+  const task = {
+    taskId,
+    uid,
+    title:         config.title         || 'مهمة مجدولة',
+    message:       config.message       || '',
+    schedule_type: config.schedule_type || 'daily',
+    hour:          config.hour          ?? 9,
+    minute:        config.minute        ?? 0,
+    timezone:      config.timezone      || 'Africa/Cairo',
+    days:          config.days          || ['sat','sun','mon','tue','wed','thu','fri'],
+    active:        true,
+    created_at:    new Date().toISOString(),
+    last_run:      null,
+    next_run:      nextRun,
+    run_count:     0,
+  };
+
+  await db.doc(`users/${uid}/scheduled_tasks/${taskId}`).set(task);
+  log('ok', 'scheduler', `Task created: ${taskId} — next: ${nextRun}`);
+  return { taskId, nextRun };
+}
+
+/**
+ * تحديث مهمة (مثلاً بعد التنفيذ)
+ */
+export async function updateScheduledTask(uid, taskId, data) {
+  try {
+    const db = await getDb();
+    await db.doc(`users/${uid}/scheduled_tasks/${taskId}`).update(data);
+  } catch (e) { log('error', 'scheduler', 'updateTask failed', { error: e.message }); }
+}
+
+/**
+ * إيقاف أو تفعيل مهمة
+ */
+export async function toggleScheduledTask(uid, taskId, active) {
+  try {
+    const db = await getDb();
+    await db.doc(`users/${uid}/scheduled_tasks/${taskId}`).update({ active });
+    log('ok', 'scheduler', `Task ${taskId} → active=${active}`);
+  } catch (e) { log('error', 'scheduler', 'toggleTask failed', { error: e.message }); }
+}
+
+/**
+ * جلب كل المهام المجدولة النشطة (لكل المستخدمين)
+ * يُستخدم من scheduler.js
+ */
+export async function getAllDueTasks() {
   try {
     const db  = await getDb();
-    const doc = await db.doc(`users/${uid}/files/${fileId}`).get();
-    return doc.exists ? doc.data() : null;
-  } catch (e) { log('error','memory','readFile',{error:e.message}); return null; }
+    const now = new Date().toISOString();
+    const snap = await db.collectionGroup('scheduled_tasks')
+      .where('active', '==', true)
+      .where('next_run', '<=', now)
+      .get();
+    return snap.docs.map(d => ({ id: d.id, ref: d.ref, ...d.data() }));
+  } catch (e) {
+    log('error', 'scheduler', 'getAllDueTasks failed', { error: e.message });
+    return [];
+  }
 }
 
 // ================================================================
 // SHELL EXECUTION
-// ────────────────────────────────────────────────────────────────
-// GitHub Actions = Ubuntu VM كامل
-// AI يكتب bash script → يشتغل مباشرة مع كامل صلاحيات الـ runner
-// curl / wget / git / npm / python3 / apt-get / أي أمر Ubuntu
+// بدون timeout — المهمة تكتمل مهما طالت
 // ================================================================
 export async function executeShell(script) {
-  const id      = `ofoq_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+  const id      = `ofoq_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   const tmpFile = join(tmpdir(), `${id}.sh`);
 
-  // كتابة الـ script مع set -e (يوقف عند أي خطأ)
   writeFileSync(tmpFile, `#!/bin/bash\nset -eo pipefail\n\n${script}\n`, 'utf8');
 
   let stdout = '', stderr = '';
   try {
     stdout = execSync(`bash "${tmpFile}"`, {
-      maxBuffer: 10 * 1024 * 1024,  // 10MB output
+      timeout:   0,                    // لا timeout — المهمة تكتمل مهما طالت
+      maxBuffer: 10 * 1024 * 1024,    // 10MB
       encoding:  'utf8',
       cwd:       PROJECT_DIR,
       env: { ...process.env, TERM: 'xterm-256color' },
     });
   } catch (e) {
-    // execSync throws on non-zero exit
     stderr = (e.stderr || '') + (e.stdout || '') + (e.message || '');
     if (e.stdout) stdout = e.stdout;
     return {
       success:   false,
       exit_code: e.status || 1,
-      stdout:    stdout.slice(0, 3000),
-      stderr:    stderr.slice(0, 1000),
+      stdout:    stdout.slice(0, 4000),
+      stderr:    stderr.slice(0, 1500),
       error:     stderr.split('\n').filter(Boolean).slice(-3).join(' | '),
     };
   } finally {
     try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch {}
   }
 
-  return {
-    success:   true,
-    exit_code: 0,
-    stdout:    stdout.slice(0, 3000),
-    stderr:    '',
-  };
+  return { success: true, exit_code: 0, stdout: stdout.slice(0, 4000), stderr: '' };
 }
-
-// ================================================================
-// SCHEDULING SYSTEM
-// ────────────────────────────────────────────────────────────────
-// كل جدول = doc في `schedules/{schedId}` (global للـ scheduler)
-//         + doc في `users/{uid}/schedules/{schedId}` (للـ frontend)
-//         + conv في `users/{uid}/conversations/conv_sched_xxx`
-// ================================================================
-
-/**
- * parseCronNext — يحسب موعد التشغيل القادم لـ cron expression
- * يدعم: * / , - وأرقام ثابتة
- * الحقول: minute hour day-of-month month day-of-week
- */
-export function parseCronNext(cronExpr, afterDate = new Date(), timezone = 'Africa/Cairo') {
-  const parts = cronExpr.trim().split(/\s+/);
-  if (parts.length !== 5) throw new Error(`cron غير صالح: "${cronExpr}" — يجب أن يكون 5 حقول`);
-  const [minP, hrP, domP, monP, dowP] = parts;
-
-  const matches = (part, val, min = 0, max = 59) => {
-    if (part === '*') return true;
-    for (const seg of part.split(',')) {
-      if (seg.includes('/')) {
-        const [range, step] = seg.split('/');
-        const s = parseInt(step);
-        const [lo, hi] = range === '*' ? [min, max] : range.split('-').map(Number);
-        for (let v = lo; v <= hi; v += s) if (v === val) return true;
-      } else if (seg.includes('-')) {
-        const [a, b] = seg.split('-').map(Number);
-        if (val >= a && val <= b) return true;
-      } else {
-        if (parseInt(seg) === val) return true;
-      }
-    }
-    return false;
-  };
-
-  // ابدأ من الدقيقة التالية
-  const d = new Date(afterDate.getTime() + 60_000);
-  d.setSeconds(0, 0);
-
-  for (let i = 0; i < 527_040; i++) { // max ~366 days
-    // تحويل للتوقيت المحلي
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hour12: false,
-    }).formatToParts(d);
-    const get = (t) => parseInt(parts.find(p => p.type === t)?.value ?? '0');
-    const [mn, hr, dom, mon, dow] = [
-      get('minute'), get('hour'), get('day'), get('month'),
-      new Date(d.toLocaleString('en-US', { timeZone: timezone })).getDay(),
-    ];
-    if (
-      matches(minP, mn, 0, 59) &&
-      matches(hrP,  hr, 0, 23) &&
-      matches(domP, dom, 1, 31) &&
-      matches(monP, mon, 1, 12) &&
-      matches(dowP, dow, 0, 6)
-    ) return new Date(d);
-
-    d.setTime(d.getTime() + 60_000);
-  }
-  return null;
-}
-
-/**
- * createSchedule — ينشئ جدول في Firestore + محادثة مخصصة له
- */
-export async function createSchedule(uid, { name, description = '', cron, taskPrompt, timezone = 'Africa/Cairo' }) {
-  const db      = await getDb();
-  const schedId = `sched_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  const convId  = `conv_sched_${schedId}`;
-
-  let nextRun = null;
-  try {
-    nextRun = parseCronNext(cron, new Date(), timezone);
-  } catch (e) {
-    throw new Error(`cron غير صالح: ${e.message}`);
-  }
-
-  const now      = new Date().toISOString();
-  const schedDoc = {
-    id:          schedId,
-    uid,
-    name,
-    description,
-    task_prompt: taskPrompt,
-    cron,
-    timezone,
-    status:      'active',
-    created_at:  now,
-    last_run_at: null,
-    next_run_at: nextRun?.toISOString() ?? null,
-    conv_id:     convId,
-    run_count:   0,
-  };
-
-  // Global — للـ scheduler
-  await db.doc(`schedules/${schedId}`).set(schedDoc);
-  // Per-user — للـ frontend
-  await db.doc(`users/${uid}/schedules/${schedId}`).set(schedDoc);
-  // المحادثة المخصصة
-  await db.doc(`users/${uid}/conversations/${convId}`).set({
-    type:          'scheduled',
-    schedule_id:   schedId,
-    schedule_name: name,
-    schedule_cron: cron,
-    schedule_desc: description,
-    created_at:    now,
-    messages:      [],
-    last_updated:  now,
-    status:        'active',
-  });
-
-  log('ok', 'schedule', `Created ${schedId} — next: ${schedDoc.next_run_at}`);
-  return { schedId, convId, nextRun: schedDoc.next_run_at };
-}
-
-/**
- * getSchedules — يجلب كل الجداول النشطة للمستخدم
- */
-export async function getSchedules(uid) {
-  try {
-    const db   = await getDb();
-    const snap = await db.collection(`users/${uid}/schedules`)
-      .where('status', '==', 'active').get();
-    return snap.docs.map(d => d.data());
-  } catch (e) {
-    log('error', 'schedule', 'getSchedules failed', { error: e.message });
-    return [];
-  }
-}
-
-/**
- * getDueSchedules — يجلب الجداول التي حان وقت تشغيلها (للـ scheduler)
- */
-export async function getDueSchedules() {
-  try {
-    const db  = await getDb();
-    const now = new Date().toISOString();
-    const snap = await db.collection('schedules')
-      .where('status', '==', 'active')
-      .where('next_run_at', '<=', now)
-      .get();
-    return snap.docs.map(d => d.data());
-  } catch (e) {
-    log('error', 'schedule', 'getDueSchedules failed', { error: e.message });
-    return [];
-  }
-}
-
-/**
- * markScheduleRan — يحدّث الجدول بعد التشغيل ويحسب الموعد القادم
- */
-export async function markScheduleRan(schedId, uid, cron, timezone = 'Africa/Cairo') {
-  try {
-    const db      = await getDb();
-    const now     = new Date();
-    const nextRun = parseCronNext(cron, now, timezone);
-    // جلب run_count الحالي
-    const doc      = await db.doc(`schedules/${schedId}`).get();
-    const runCount = (doc.data()?.run_count ?? 0) + 1;
-    const upd = {
-      last_run_at: now.toISOString(),
-      next_run_at: nextRun?.toISOString() ?? null,
-      run_count:   runCount,
-    };
-    await db.doc(`schedules/${schedId}`).update(upd);
-    await db.doc(`users/${uid}/schedules/${schedId}`).update(upd);
-    log('ok', 'schedule', `Marked ran — schedId=${schedId} runCount=${runCount} next=${upd.next_run_at}`);
-    return runCount;
-  } catch (e) {
-    log('error', 'schedule', 'markScheduleRan failed', { error: e.message });
-    return 0;
-  }
-}
-
-/**
- * appendScheduleMessage — يضيف رسالة لمحادثة الجدول (كل تشغيل رسالة)
- */
-export async function appendScheduleMessage(uid, convId, schedId, content, runNumber) {
-  try {
-    const { getFirestore, FieldValue } = await import('firebase-admin/firestore');
-    const db = getFirestore();
-    await db.doc(`users/${uid}/conversations/${convId}`).update({
-      messages:     FieldValue.arrayUnion({
-        timestamp:  new Date().toISOString(),
-        run_number: runNumber,
-        content,
-        status:     'done',
-      }),
-      last_updated: new Date().toISOString(),
-    });
-    log('ok', 'schedule', `Appended message #${runNumber} to ${convId}`);
-  } catch (e) {
-    log('error', 'schedule', 'appendScheduleMessage failed', { error: e.message });
-  }
-}
-
-/**
- * getScheduleById — يجلب بيانات جدول معين
- */
-export async function getScheduleById(schedId) {
-  try {
-    const db  = await getDb();
-    const doc = await db.doc(`schedules/${schedId}`).get();
-    return doc.exists ? doc.data() : null;
-  } catch (e) {
-    log('error', 'schedule', 'getScheduleById failed', { error: e.message });
-    return null;
-  }
-}
-
-/**
- * deactivateSchedule — إيقاف جدول
- */
-export async function deactivateSchedule(uid, schedId) {
-  try {
-    const db = await getDb();
-    await db.doc(`schedules/${schedId}`).update({ status: 'paused' });
-    await db.doc(`users/${uid}/schedules/${schedId}`).update({ status: 'paused' });
-    log('ok', 'schedule', `Deactivated ${schedId}`);
-  } catch (e) {
-    log('error', 'schedule', 'deactivateSchedule failed', { error: e.message });
-  }
-}
-

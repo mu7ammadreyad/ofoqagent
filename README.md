@@ -1,129 +1,136 @@
-# OFOQ Agent v6.0
+# أفق — OFOQ Agent v6.1
 
-مساعد ذكي متكامل قادر على تنفيذ **أي مهمة** — برمجة، بحث، تحليل، جدولة، نشر، وأتمتة.
-
-بُني على: **GitHub Actions** (Ubuntu VM) + **Firebase Firestore** + **Gemma 4**
+عميل ذكاء اصطناعي متكامل مبني على GitHub Actions + Firebase. يستطيع تنفيذ **أي مهمة برمجية أو تشغيلية** وجدولة المهام المتكررة تلقائياً.
 
 ---
 
-## المعمارية
+## المميزات
 
-```
-Frontend (index.html)
-   │ repository_dispatch
-   ▼
-GitHub Actions → agent.js          ← محادثات عادية
-GitHub Actions → scheduler.js      ← مهام مجدولة (كل دقيقة)
-
-Firestore:
-  users/{uid}/conversations/{convId}   ← المحادثات
-  users/{uid}/schedules/{schedId}      ← الجداول (per-user)
-  users/{uid}/config/memory            ← ذاكرة المستخدم
-  schedules/{schedId}                  ← الجداول (global للـ scheduler)
-```
+- **محادثة طبيعية** — اكتب بالعربية وأفق يفهم ويُنفِّذ
+- **جدولة مهام تلقائية** — "كل يوم الساعة 9 أرسل لي آية قرآنية" يعمل فعلاً
+- **تنفيذ كود حقيقي** — shell, Python, curl, git, ffmpeg, أي شيء على Ubuntu
+- **ذاكرة دائمة** — يتذكر المعلومات بين المحادثات عبر Firestore
+- **محادثات مرتبطة بـ URL** — كل محادثة لها رابط فريد في المتصفح
+- **المهام المجدولة** في قسم منفصل بالـ sidebar
 
 ---
 
-## الملفات
+## الهيكل
 
-| الملف | الدور |
-|---|---|
-| `src/agent.js` | ReAct loop — 15 round، بدون timeout |
-| `src/scheduler.js` | يشتغل كل دقيقة، ينفذ المهام الحانة |
-| `src/tools.js` | Shell + Memory + Scheduling functions |
-| `skills/soul.md` | شخصية الـ AI ومنهجية تفكيره |
-| `skills/tools.md` | دليل shell شامل (1300+ سطر) |
-| `skills/memory.md` | قالب الذاكرة الابتدائي |
-| `public/index.html` | واجهة المستخدم |
-| `.github/workflows/agent.yml` | GitHub Action للمحادثات |
-| `.github/workflows/scheduler.yml` | GitHub Action للجدولة (كل دقيقة) |
+```
+ofoqagent/
+├── public/
+│   └── index.html          # واجهة المستخدم (RTL، sidebar يمين)
+├── skills/
+│   ├── soul.md             # شخصية الـ agent ومنهج تفكيره
+│   ├── tools.md            # مرجع الأدوات الشامل (shell, python, APIs)
+│   └── memory.md           # قالب الذاكرة الأولية
+├── src/
+│   ├── agent.js            # ReAct loop — ينفذ المحادثات
+│   ├── scheduler.js        # يفحص المهام المجدولة ويطلقها
+│   └── tools.js            # أدوات: shell, memory, conversations, scheduled tasks
+├── .github/workflows/
+│   ├── agent.yml           # يشتغل عند كل رسالة (repository_dispatch)
+│   └── scheduler.yml       # يشتغل كل ساعة (cron)
+└── package.json
+```
 
 ---
 
 ## الإعداد
 
 ### 1. Firebase
-- أنشئ مشروع في Firebase Console
-- فعّل **Authentication** (Email/Password + Google)
-- فعّل **Firestore**
-- حمّل **Service Account** JSON
+
+1. أنشئ مشروع Firebase من [console.firebase.google.com](https://console.firebase.google.com)
+2. فعّل **Authentication** (Email/Password + Google)
+3. فعّل **Firestore** في وضع production
+4. من Project Settings → Service Accounts → Generate new private key → احفظ الـ JSON
 
 ### 2. GitHub Secrets
-أضف هذه الـ Secrets في `Settings → Secrets → Actions`:
 
-| Secret | القيمة |
-|---|---|
+أضف في Settings → Secrets and variables → Actions:
+
+| الاسم | القيمة |
+|-------|--------|
 | `GEMINI_API_KEY` | مفتاح Gemini API |
-| `FIREBASE_SERVICE_ACCOUNT` | محتوى ملف Service Account JSON |
+| `FIREBASE_SERVICE_ACCOUNT` | محتوى ملف JSON كاملاً |
 
-### 3. Frontend
-في `public/index.html` عدّل:
-```js
-const FIREBASE_CONFIG = { /* من Firebase Console */ };
-const GITHUB_OWNER      = "your-username";
-const GITHUB_AGENT_REPO = "ofoqagent";
-const GITHUB_TOKEN      = "ghp_...";  // PAT بصلاحية workflow
-```
+### 3. Firestore Index (للمهام المجدولة)
 
-### 4. Firestore Rules
-```
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{uid}/{document=**} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-    }
-    match /schedules/{schedId} {
-      allow read, write: if false; // فقط Service Account
-    }
-  }
-}
+أضف Collection Group Index لـ `scheduled_tasks`:
+- Collection ID: `scheduled_tasks`
+- Fields: `active` (Ascending) + `next_run` (Ascending)
+
+أو شغّل المجدول مرة وستظهر رسالة خطأ بها رابط إنشاء الـ index تلقائياً.
+
+### 4. index.html
+
+عدّل القيم في أعلى `<script>` في `public/index.html`:
+```javascript
+const GITHUB_OWNER      = "username";    // اسم مستخدم GitHub
+const GITHUB_AGENT_REPO = "ofoqagent";  // اسم الـ repo
+const GITHUB_TOKEN      = "ghp_...";    // PAT بصلاحية workflow
 ```
 
 ---
 
-## Actions المتاحة للـ AI
+## Actions المتاحة للـ Agent
 
-| Action | الوظيفة |
-|---|---|
-| `<action type="shell">` | تنفيذ bash script (بدون timeout) |
-| `<action type="update_memory">` | تحديث ذاكرة المستخدم في Firestore |
-| `<action type="create_schedule">` | إنشاء مهمة مجدولة متكررة |
-| `<action type="list_schedules">` | عرض الجداول النشطة |
-| `<action type="pause_schedule">` | إيقاف جدول |
+### shell
+```xml
+<action type="shell">
+curl -sf https://api.github.com/user
+</action>
+```
 
----
+### update_memory
+```xml
+<action type="update_memory">
+## CONFIG
+github_token: ghp_xxx
+...
+</action>
+```
 
-## مثال على الجدولة
-
-**المستخدم يكتب:** "أريد حكمة جديدة كل يوم الساعة 9 صباحاً"
-
-**الـ AI يُنشئ:**
-```json
+### schedule_task
+```xml
+<action type="schedule_task">
 {
-  "name": "حكمة يومية",
-  "cron": "0 9 * * *",
-  "taskPrompt": "اكتب حكمة عربية أصيلة مع شرحها في سطرين",
-  "timezone": "Africa/Cairo"
+  "title": "حكمة يومية",
+  "message": "أعطني حكمة إسلامية جديدة",
+  "schedule_type": "daily",
+  "hour": 9,
+  "minute": 0,
+  "days": ["sat","sun","mon","tue","wed","thu","fri"]
 }
+</action>
 ```
 
-**النتيجة:**
-- تظهر محادثة جديدة في قسم "المهام المجدولة" في الـ sidebar
-- كل يوم الساعة 9 ينشئ الـ scheduler رسالة جديدة في تلك المحادثة تلقائياً
-- المستخدم يفتح المحادثة ويجد كل الحكم المتراكمة
+### cancel_task
+```xml
+<action type="cancel_task" task_id="task_1234_abc1">
+</action>
+```
 
 ---
 
-## الفرق عن v5
+## كيف تعمل الجدولة
 
-| v5 | v6 |
-|---|---|
-| مخصص للنشر الإسلامي فقط | general-purpose — أي مهمة |
-| Sidebar يسار | Sidebar يمين (RTL) |
-| إعدادات في الـ header | إعدادات في أسفل الـ sidebar |
-| لا جدولة حقيقية | جدولة Firestore كاملة |
-| timeout 55s للـ shell | بدون timeout |
-| 8 ReAct rounds | 15 ReAct rounds |
-| tools.md 141 سطر | tools.md 1300+ سطر |
-| محادثات localStorage | محادثات Firestore دائمة |
+1. المستخدم يطلب: "كل يوم الساعة 7 أرسل لي آية قرآنية"
+2. الـ agent يستخدم `schedule_task` لحفظ المهمة في Firestore
+3. المهمة تظهر في الـ sidebar تحت "المهام المجدولة"
+4. كل ساعة: `scheduler.yml` يشغّل `scheduler.js`
+5. `scheduler.js` يقرأ المهام النشطة ويتحقق من `next_run`
+6. للمهام الحانة: ينشئ محادثة جديدة في Firestore ويطلق `agent-chat`
+7. الـ agent ينفذ المهمة ويكتب الرد في المحادثة
+8. المحادثة تظهر في تطبيق المستخدم تلقائياً
+
+---
+
+## ملاحظات تقنية
+
+- **لا timeout** على shell أو model calls — المهمة تكتمل مهما طالت
+- **GitHub Actions timeout**: 360 دقيقة (6 ساعات)
+- **ReAct loop**: حد أقصى 15 جولة لكل محادثة
+- **Sidebar**: على اليمين (RTL)، بلون الخلفية
+- **URL routing**: كل محادثة لها `?conv=conv_xxx` في المتصفح
