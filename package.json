@@ -1,13 +1,13 @@
 {
   "name": "ofoq-agent",
-  "version": "6.0.0",
+  "version": "6.1.0",
   "type": "module",
   "private": true,
-  "description": "OFOQ General Agent — GitHub Actions + Firebase + Scheduling",
+  "description": "OFOQ Agent v6.1 — عميل ذكاء اصطناعي متكامل، GitHub Actions + Firebase",
   "engines": { "node": ">=20" },
   "scripts": {
     "agent":     "node src/agent.js",
-    "scheduler": "AGENT_MODE=scheduler node src/agent.js"
+    "scheduler": "node src/scheduler.js"
   },
   "dependencies": {
     "firebase-admin": "^12.3.0"

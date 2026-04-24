@@ -307,3 +307,118 @@ export async function executeShell(script) {
 
   return { success: true, exit_code: 0, stdout: stdout.slice(0, 4000), stderr: '' };
 }
+
+// ================================================================
+// BROWSER EXECUTION — AX Tree via Playwright
+// ================================================================
+export async function executeBrowser(url, task = '') {
+  // Playwright script يُنفَّذ كـ subprocess
+  const script = `
+#!/usr/bin/env python3
+import json, sys, os
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    # تثبيت تلقائي إذا لم يكن مثبتاً
+    os.system("pip install playwright --quiet --break-system-packages")
+    os.system("playwright install chromium --with-deps --quiet")
+    from playwright.sync_api import sync_playwright
+
+def deep_fetch(url, task):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True, args=[
+            "--no-sandbox", "--disable-dev-shm-usage",
+            "--disable-gpu", "--disable-web-security"
+        ])
+        page = browser.new_page()
+        # إيقاف الموارد الثقيلة
+        page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,mp4,mp3}", lambda r: r.abort())
+
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            try: page.wait_for_load_state("networkidle", timeout=8000)
+            except: pass
+        except Exception as e:
+            browser.close()
+            return {"success": False, "error": str(e)}
+
+        # AX Tree
+        ax_tree = None
+        try:
+            ax_tree = page.accessibility.snapshot(interesting_only=True)
+        except: pass
+
+        # نص الصفحة
+        text = ""
+        try: text = page.inner_text("body").strip()[:8000]
+        except: pass
+
+        # عناوين
+        headings = []
+        try:
+            headings = page.evaluate("""
+                () => [...document.querySelectorAll('h1,h2,h3')]
+                  .map(h => ({tag: h.tagName, text: h.innerText.trim()[:100]}))
+                  .slice(0, 20)
+            """)
+        except: pass
+
+        # روابط
+        links = []
+        try:
+            links = page.evaluate("""
+                () => [...document.querySelectorAll('a[href]')]
+                  .filter(a => a.innerText.trim())
+                  .map(a => ({text: a.innerText.trim()[:60], href: a.href}))
+                  .slice(0, 25)
+            """)
+        except: pass
+
+        # محاولة استخراج محتوى المقال
+        article_text = ""
+        try:
+            article_text = page.evaluate("""
+                () => {
+                    const sels = ['article','main','[role=main]',
+                                  '.article-body','.post-content','.entry-content','.content'];
+                    for (const s of sels) {
+                        const el = document.querySelector(s);
+                        if (el && el.innerText.length > 300)
+                            return el.innerText.trim();
+                    }
+                    return '';
+                }
+            """)[:6000]
+        except: pass
+
+        browser.close()
+        return {
+            "success": True,
+            "url": url,
+            "task": task,
+            "text": text,
+            "article_text": article_text,
+            "headings": headings,
+            "links": links,
+            "ax_tree": json.dumps(ax_tree, ensure_ascii=False)[:3000] if ax_tree else None,
+            "textLength": len(text),
+        }
+
+result = deep_fetch(${JSON.stringify(url)}, ${JSON.stringify(task)})
+print(json.dumps(result, ensure_ascii=False))
+`;
+
+  const shellResult = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
+
+  if (!shellResult.success) {
+    return { success: false, type: 'browser', error: shellResult.error };
+  }
+
+  try {
+    const parsed = JSON.parse(shellResult.stdout.trim());
+    return { type: 'browser', ...parsed };
+  } catch {
+    return { success: false, type: 'browser', error: 'JSON parse failed', raw: shellResult.stdout?.slice(0, 200) };
+  }
+}
