@@ -906,7 +906,6 @@ async function runScheduledTask(sched, now) {
 // ================================================================
 async function executeScheduledPrompt(taskPrompt, memory, sched, runNumber, now, timezone) {
   const nowStr = now.toLocaleString('ar-EG', { timeZone: timezone });
-  const memory    = await loadMemory(uid);
   const sysSkills = readSkill('skills.md') || '';
   const systemInstruction = `${sysSkills.slice(0, 2000)}
 
