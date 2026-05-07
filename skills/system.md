@@ -69,10 +69,17 @@
 
 ### المرحلة 6: CLOSE (الإغلاق)
 ```
-  - حدّث memory.md بما تغير
+  - حدّث memory.md بما تغير (إذا لزم)
   - سجّل في RECENT LOG
-  - اكتب الرد النهائي للمستخدم بوضوح
+  - اكتب: ===FINAL_ANSWER===
+    ثم الرد للمستخدم مباشرة بالعربية بدون مقدمة
 ```
+
+> **مهم جداً — قاعدة الرد النهائي:**
+> - عند اكتمال المهمة اكتب `===FINAL_ANSWER===` ثم الرد مباشرة
+> - لا تكتب "The user wants..." أو أي تحليل داخلي في الرد
+> - لا تكتب بالإنجليزية في الرد (الأكواد استثناء)
+> - لا تضع أي `<action>` بعد `===FINAL_ANSWER===`
 
 ### مثال كامل على التفكير
 ```
@@ -84,7 +91,7 @@
 [PLAN]
   GOAL:  إنشاء مهمة مجدولة تُرسل حكمة يومياً الساعة 7 صباحاً
   STEPS: 1. إنشاء schedule_task بالإعدادات الصحيحة
-  RISKS: ساعة 7 القاهرة = 5 UTC في الصيف / 5 UTC في الشتاء
+  RISKS: ساعة 7 القاهرة = 5 UTC في الصيف
   NOTE:  calcNextRun() تتعامل مع التوقيت تلقائياً
   OUTPUT: تأكيد للمستخدم بالوقت والتفاصيل
 
@@ -99,7 +106,13 @@
   ✅ اكتملت الخطة
 
 [CLOSE]
-  → رد واضح للمستخدم
+===FINAL_ANSWER===
+تم جدولة مهمة "حكمة يومية" بنجاح ✅
+
+التفاصيل:
+- التوقيت: كل يوم الساعة 7:00 صباحاً (القاهرة)
+- أول تنفيذ: غداً 7:00 صباحاً
+- المهمة في الـ sidebar تحت "المهام المجدولة"
 ```
 
 ---
@@ -352,10 +365,84 @@ def api_call_with_retry(url, headers, max_retries=3):
 > البحث العميق = تشغيل متصفح حقيقي + قراءة شجرة الـ Accessibility
 > أكثر موثوقية من HTML parsing لأنه يرى الصفحة كما يراها المستخدم
 
-### VI-A. التثبيت (GitHub Actions)
+### VI-A. كيف يعمل browser action
+
+عند استخدام `<action type="browser">`:
+1. tools.js يثبت playwright تلقائياً (بدون `--quiet` — يتسبب بأخطاء)
+2. يشغّل Chromium headless
+3. يجلب `accessibility.snapshot()` → AX Tree كامل
+4. يُعيد: `text`, `article_text`, `headings`, `links`, `ax_tree`, `ax_tree_used`
+
+### VI-B. ماذا تفعل إذا فشل browser action؟
+
+**REFLEXION صحيح عند فشل browser:**
+```
+نتيجة: { success: false, error: "Executable doesn't exist..." }
+
+[REFLEXION]
+- السبب: Chromium لم يُثبَّت بعد
+- الحل: استخدم shell لتثبيته أولاً ثم أعد browser action
+- OR: استخدم curl + python3 كبديل مؤقت
+```
+
+**shell بديل عند فشل browser:**
+```xml
+<action type="shell">
+#!/bin/bash
+set -eo pipefail
+pip install playwright --break-system-packages -q
+python3 -m playwright install chromium --with-deps
+echo "playwright_ready"
+</action>
+```
+ثم بعد نجاح الشيل → أعد `<action type="browser">`.
+
+**إذا فشل playwright تماماً → استخدم curl:**
+```xml
+<action type="shell">
+python3 << 'PYEOF'
+import urllib.request, json
+
+headers = {
+    "User-Agent": "Mozilla/5.0 (compatible; OFOQ/6.2)",
+    "Accept-Language": "ar,en;q=0.9",
+}
+req = urllib.request.Request("https://example.com", headers=headers)
+with urllib.request.urlopen(req, timeout=15) as r:
+    content = r.read().decode('utf-8', errors='ignore')
+    # استخرج النص
+    import re
+    text = re.sub(r'<[^>]+>', ' ', content)
+    text = re.sub(r'\s+', ' ', text).strip()[:5000]
+    print(text)
+PYEOF
+</action>
+```
+
+### VI-C. قراءة نتيجة browser action بشكل صحيح
+```
+النتيجة تحتوي على:
+  ax_tree_used: true/false  ← هل نجح accessibility.snapshot()؟
+  ax_tree_error: null/"..."  ← سبب الفشل لو فشل
+  text: "..."               ← نص الصفحة الكامل
+  article_text: "..."       ← محتوى المقال (أكثر دقة)
+  headings: [...]           ← العناوين h1,h2,h3
+  links: [...]              ← الروابط المرئية
+
+استخدم article_text أولاً إذا كان > 300 حرف
+استخدم text كـ fallback
+استخدم ax_tree للهيكل إذا كان غير null
+```
+
+### VI-D. التثبيت الصحيح (GitHub Actions)
 ```bash
+# صح — بدون --quiet
+pip install playwright --break-system-packages
+python3 -m playwright install chromium --with-deps
+
+# خطأ — --quiet يسبب مشاكل
 pip install playwright --quiet --break-system-packages
-playwright install chromium --with-deps
+playwright install chromium --with-deps --quiet
 ```
 
 ### VI-B. جلب صفحة كاملة مع AX Tree
@@ -677,18 +764,18 @@ git push origin main
 ```
 
 ### X-C. رد النموذج بعد الجدولة
+بعد نجاح schedule_task، اكتب:
 ```
-بعد نجاح schedule_task، اكتب للمستخدم:
-
-"تم جدولة مهمة '{title}' بنجاح ✅
+===FINAL_ANSWER===
+تم جدولة مهمة "{title}" بنجاح ✅
 
 التفاصيل:
 - التوقيت: كل يوم الساعة {hour}:{minute:02d} (القاهرة)
 - الأيام: {days}
 - أول تنفيذ: {nextRun بتوقيت القاهرة}
-- المهمة في الـ sidebar تحت 'المهام المجدولة'
+- المهمة في الـ sidebar تحت "المهام المجدولة"
 
-كل {schedule_type} في الوقت المحدد ستجد محادثة جديدة بالنتيجة."
+كل {schedule_type} في الوقت المحدد ستجد محادثة جديدة بالنتيجة.
 ```
 
 ---

@@ -312,42 +312,72 @@ export async function executeShell(script) {
 // BROWSER EXECUTION — AX Tree via Playwright
 // ================================================================
 export async function executeBrowser(url, task = '') {
-  // Playwright script يُنفَّذ كـ subprocess
+  // خطوة 1: تثبيت playwright إن لم يكن مثبتاً (shell منفصل)
+  const installResult = await executeShell(`
+pip install playwright --break-system-packages -q 2>&1 || true
+python3 -c "from playwright.sync_api import sync_playwright; print('playwright_ok')" 2>/dev/null || {
+  echo "playwright_missing"
+  exit 1
+}
+# تثبيت chromium إذا لم يكن موجوداً
+python3 -c "
+import subprocess, sys
+result = subprocess.run(['playwright', 'install', 'chromium', '--with-deps'],
+  capture_output=True, text=True)
+print('chromium install:', result.returncode)
+if result.returncode != 0:
+    print(result.stderr[:200])
+" 2>&1 || true
+echo "setup_done"
+`);
+
+  if (installResult.stdout?.includes('playwright_missing')) {
+    return { success: false, type: 'browser', error: 'تعذر تثبيت Playwright — جرب shell يدوياً' };
+  }
+
+  // خطوة 2: تشغيل الـ browser script
+  const urlEsc  = url.replace(/'/g, "\\'");
+  const taskEsc = task.replace(/'/g, "\\'");
+
   const script = `
-#!/usr/bin/env python3
 import json, sys, os
 
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
-    # تثبيت تلقائي إذا لم يكن مثبتاً
-    os.system("pip install playwright --quiet --break-system-packages")
-    os.system("playwright install chromium --with-deps --quiet")
-    from playwright.sync_api import sync_playwright
+    print(json.dumps({"success": False, "error": "playwright not available"}))
+    sys.exit(0)
+
+AX_TREE_USED = False
 
 def deep_fetch(url, task):
+    global AX_TREE_USED
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=[
             "--no-sandbox", "--disable-dev-shm-usage",
-            "--disable-gpu", "--disable-web-security"
+            "--disable-gpu", "--disable-web-security",
+            "--disable-setuid-sandbox"
         ])
         page = browser.new_page()
-        # إيقاف الموارد الثقيلة
-        page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,mp4,mp3}", lambda r: r.abort())
+        page.set_extra_http_headers({"Accept-Language": "ar,en;q=0.9"})
+        page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,mp4,mp3,webm}", lambda r: r.abort())
 
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            try: page.wait_for_load_state("networkidle", timeout=8000)
+            try: page.wait_for_load_state("networkidle", timeout=6000)
             except: pass
         except Exception as e:
             browser.close()
-            return {"success": False, "error": str(e)}
+            return {"success": False, "error": str(e), "ax_tree_used": False}
 
-        # AX Tree
+        # AX Tree — accessibility.snapshot()
         ax_tree = None
+        ax_tree_error = None
         try:
             ax_tree = page.accessibility.snapshot(interesting_only=True)
-        except: pass
+            AX_TREE_USED = True
+        except Exception as e:
+            ax_tree_error = str(e)
 
         # نص الصفحة
         text = ""
@@ -357,25 +387,25 @@ def deep_fetch(url, task):
         # عناوين
         headings = []
         try:
-            headings = page.evaluate("""
-                () => [...document.querySelectorAll('h1,h2,h3')]
-                  .map(h => ({tag: h.tagName, text: h.innerText.trim()[:100]}))
-                  .slice(0, 20)
-            """)
+            headings = page.evaluate(
+                "() => [...document.querySelectorAll('h1,h2,h3')]"
+                ".map(h => ({tag: h.tagName, text: h.innerText.trim().substring(0,100)}))"
+                ".slice(0, 20)"
+            )
         except: pass
 
         # روابط
         links = []
         try:
-            links = page.evaluate("""
-                () => [...document.querySelectorAll('a[href]')]
-                  .filter(a => a.innerText.trim())
-                  .map(a => ({text: a.innerText.trim()[:60], href: a.href}))
-                  .slice(0, 25)
-            """)
+            links = page.evaluate(
+                "() => [...document.querySelectorAll('a[href]')]"
+                ".filter(a => a.innerText.trim())"
+                ".map(a => ({text: a.innerText.trim().substring(0,60), href: a.href}))"
+                ".slice(0, 25)"
+            )
         except: pass
 
-        # محاولة استخراج محتوى المقال
+        # محتوى المقال
         article_text = ""
         try:
             article_text = page.evaluate("""
@@ -385,14 +415,19 @@ def deep_fetch(url, task):
                     for (const s of sels) {
                         const el = document.querySelector(s);
                         if (el && el.innerText.length > 300)
-                            return el.innerText.trim();
+                            return el.innerText.trim().substring(0, 6000);
                     }
-                    return '';
+                    return document.body.innerText.trim().substring(0, 4000);
                 }
-            """)[:6000]
+            """)
         except: pass
 
         browser.close()
+
+        ax_summary = None
+        if ax_tree:
+            ax_summary = json.dumps(ax_tree, ensure_ascii=False)[:3000]
+
         return {
             "success": True,
             "url": url,
@@ -401,24 +436,30 @@ def deep_fetch(url, task):
             "article_text": article_text,
             "headings": headings,
             "links": links,
-            "ax_tree": json.dumps(ax_tree, ensure_ascii=False)[:3000] if ax_tree else None,
+            "ax_tree": ax_summary,
+            "ax_tree_used": AX_TREE_USED,
+            "ax_tree_error": ax_tree_error,
             "textLength": len(text),
         }
 
-result = deep_fetch(${JSON.stringify(url)}, ${JSON.stringify(task)})
+result = deep_fetch('${urlEsc}', '${taskEsc}')
 print(json.dumps(result, ensure_ascii=False))
 `;
 
   const shellResult = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
 
-  if (!shellResult.success) {
-    return { success: false, type: 'browser', error: shellResult.error };
+  // لوج AX Tree status
+  if (shellResult.success && shellResult.stdout) {
+    try {
+      const parsed = JSON.parse(shellResult.stdout.trim());
+      log('info', 'browser',
+        `ax_tree_used=${parsed.ax_tree_used} | ax_tree_error=${parsed.ax_tree_error || 'none'} | textLen=${parsed.textLength}`
+      );
+      return { type: 'browser', ...parsed };
+    } catch {
+      return { success: false, type: 'browser', error: 'JSON parse failed', raw: shellResult.stdout?.slice(0, 200) };
+    }
   }
 
-  try {
-    const parsed = JSON.parse(shellResult.stdout.trim());
-    return { type: 'browser', ...parsed };
-  } catch {
-    return { success: false, type: 'browser', error: 'JSON parse failed', raw: shellResult.stdout?.slice(0, 200) };
-  }
+  return { success: false, type: 'browser', error: shellResult.error };
 }
