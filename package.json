@@ -1,12 +1,14 @@
 {
   "name": "ofoq-agent",
-  "version": "6.1.0",
+  "version": "7.0.0",
   "type": "module",
   "private": true,
-  "description": "OFOQ Agent v6.1 — عميل ذكاء اصطناعي متكامل، GitHub Actions + Firebase",
-  "engines": { "node": ">=20" },
+  "description": "OFOQ BICAMERAL SOVEREIGN v7 — LOGOS × PATHOS, GitHub Actions + Firebase",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "agent":     "node src/agent.js",
+    "agent": "node src/agent.js",
     "scheduler": "node src/scheduler.js"
   },
   "dependencies": {
