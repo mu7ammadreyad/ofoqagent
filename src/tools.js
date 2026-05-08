@@ -311,155 +311,226 @@ export async function executeShell(script) {
 // ================================================================
 // BROWSER EXECUTION — AX Tree via Playwright
 // ================================================================
-export async function executeBrowser(url, task = '') {
-  // خطوة 1: تثبيت playwright إن لم يكن مثبتاً (shell منفصل)
-  const installResult = await executeShell(`
-pip install playwright --break-system-packages -q 2>&1 || true
-python3 -c "from playwright.sync_api import sync_playwright; print('playwright_ok')" 2>/dev/null || {
-  echo "playwright_missing"
-  exit 1
-}
-# تثبيت chromium إذا لم يكن موجوداً
-python3 -c "
-import subprocess, sys
-result = subprocess.run(['playwright', 'install', 'chromium', '--with-deps'],
-  capture_output=True, text=True)
-print('chromium install:', result.returncode)
-if result.returncode != 0:
-    print(result.stderr[:200])
-" 2>&1 || true
-echo "setup_done"
-`);
 
-  if (installResult.stdout?.includes('playwright_missing')) {
-    return { success: false, type: 'browser', error: 'تعذر تثبيت Playwright — جرب shell يدوياً' };
+// ================================================================
+// BROWSER EXECUTION
+// المستوى 1: Camoufox (Firefox متخفي — يتجاوز bot detection)
+// المستوى 2: requests + html parsing (fallback للمواقع البسيطة)
+// ================================================================
+
+/**
+ * تثبيت الأدوات المطلوبة مرة واحدة وتخزين النتيجة
+ */
+let _browserReady = false;
+async function ensureBrowserTools() {
+  if (_browserReady) return true;
+  const check = await executeShell(`python3 -c "import camoufox; print('camoufox_ok')" 2>/dev/null || echo "camoufox_missing"`);
+  if (check.stdout?.includes('camoufox_ok')) { _browserReady = true; return true; }
+
+  log('info','browser','Installing camoufox...');
+  const install = await executeShell(`
+pip install camoufox[geoip] --break-system-packages -q 2>&1 | tail -3
+python3 -m camoufox fetch --browser firefox 2>&1 | tail -5
+echo "install_done"
+`);
+  _browserReady = install.stdout?.includes('install_done');
+  return _browserReady;
+}
+
+/**
+ * engine = "camoufox" | "requests"
+ */
+export async function executeBrowser(url, task = '', engine = 'camoufox') {
+  // requests fallback — للمواقع البسيطة (أسرع، بدون browser)
+  if (engine === 'requests') {
+    return executeRequestsFetch(url, task);
   }
 
-  // خطوة 2: تشغيل الـ browser script
+  // Camoufox — Firefox متخفي يتجاوز Cloudflare/bot detection
+  await ensureBrowserTools();
+  return executeCamoufox(url, task);
+}
+
+async function executeCamoufox(url, task) {
   const urlEsc  = url.replace(/'/g, "\\'");
   const taskEsc = task.replace(/'/g, "\\'");
 
   const script = `
-import json, sys, os
+import json, sys
 
 try:
-    from playwright.sync_api import sync_playwright
+    from camoufox.sync_api import Camoufox
 except ImportError:
-    print(json.dumps({"success": False, "error": "playwright not available"}))
+    print(json.dumps({"success": False, "error": "camoufox not available", "engine_used": "camoufox"}))
     sys.exit(0)
 
-AX_TREE_USED = False
-
-def deep_fetch(url, task):
-    global AX_TREE_USED
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, args=[
-            "--no-sandbox", "--disable-dev-shm-usage",
-            "--disable-gpu", "--disable-web-security",
-            "--disable-setuid-sandbox"
-        ])
-        page = browser.new_page()
-        page.set_extra_http_headers({"Accept-Language": "ar,en;q=0.9"})
-        page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2,mp4,mp3,webm}", lambda r: r.abort())
-
+def extract_article(page):
+    """استخراج محتوى المقال الرئيسي"""
+    selectors = ['article', 'main', '[role=main]',
+                 '.article-body', '.post-content',
+                 '.entry-content', '.content', '#content']
+    for sel in selectors:
         try:
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            try: page.wait_for_load_state("networkidle", timeout=6000)
-            except: pass
-        except Exception as e:
-            browser.close()
-            return {"success": False, "error": str(e), "ax_tree_used": False}
+            el = page.query_selector(sel)
+            if el:
+                text = el.inner_text().strip()
+                if len(text) > 300:
+                    return text[:7000]
+        except Exception:
+            continue
+    try:
+        return page.inner_text('body').strip()[:5000]
+    except Exception:
+        return ''
 
-        # AX Tree — accessibility.snapshot()
-        ax_tree = None
-        ax_tree_error = None
-        try:
-            ax_tree = page.accessibility.snapshot(interesting_only=True)
-            AX_TREE_USED = True
-        except Exception as e:
-            ax_tree_error = str(e)
+def run():
+    try:
+        with Camoufox(headless=True) as browser:
+            page = browser.new_page()
 
-        # نص الصفحة
-        text = ""
-        try: text = page.inner_text("body").strip()[:8000]
-        except: pass
+            # تجاهل الموارد الثقيلة
+            def block_heavy(route, req):
+                if req.resource_type in ('image', 'media', 'font', 'stylesheet'):
+                    route.abort()
+                else:
+                    route.continue_()
+            page.route('**/*', block_heavy)
 
-        # عناوين
-        headings = []
-        try:
-            headings = page.evaluate(
-                "() => [...document.querySelectorAll('h1,h2,h3')]"
-                ".map(h => ({tag: h.tagName, text: h.innerText.trim().substring(0,100)}))"
-                ".slice(0, 20)"
-            )
-        except: pass
+            page.goto('${urlEsc}', wait_until='domcontentloaded', timeout=30000)
+            try:
+                page.wait_for_load_state('networkidle', timeout=6000)
+            except Exception:
+                pass
 
-        # روابط
-        links = []
-        try:
-            links = page.evaluate(
-                "() => [...document.querySelectorAll('a[href]')]"
-                ".filter(a => a.innerText.trim())"
-                ".map(a => ({text: a.innerText.trim().substring(0,60), href: a.href}))"
-                ".slice(0, 25)"
-            )
-        except: pass
+            title = ''
+            try: title = page.title()
+            except Exception: pass
 
-        # محتوى المقال
-        article_text = ""
-        try:
-            article_text = page.evaluate("""
-                () => {
-                    const sels = ['article','main','[role=main]',
-                                  '.article-body','.post-content','.entry-content','.content'];
-                    for (const s of sels) {
-                        const el = document.querySelector(s);
-                        if (el && el.innerText.length > 300)
-                            return el.innerText.trim().substring(0, 6000);
-                    }
-                    return document.body.innerText.trim().substring(0, 4000);
-                }
-            """)
-        except: pass
+            article_text = extract_article(page)
 
-        browser.close()
+            headings = []
+            try:
+                headings = page.evaluate(
+                    "() => [...document.querySelectorAll('h1,h2,h3')]"
+                    ".map(h => ({tag:h.tagName,text:h.innerText.trim().substring(0,120)}))"
+                    ".slice(0,15)"
+                )
+            except Exception: pass
 
-        ax_summary = None
-        if ax_tree:
-            ax_summary = json.dumps(ax_tree, ensure_ascii=False)[:3000]
+            links = []
+            try:
+                links = page.evaluate(
+                    "() => [...document.querySelectorAll('a[href]')]"
+                    ".filter(a => a.innerText.trim().length > 2)"
+                    ".map(a => ({text:a.innerText.trim().substring(0,60),href:a.href}))"
+                    ".slice(0,20)"
+                )
+            except Exception: pass
 
-        return {
-            "success": True,
-            "url": url,
-            "task": task,
-            "text": text,
-            "article_text": article_text,
-            "headings": headings,
-            "links": links,
-            "ax_tree": ax_summary,
-            "ax_tree_used": AX_TREE_USED,
-            "ax_tree_error": ax_tree_error,
-            "textLength": len(text),
-        }
+            return {
+                "success": True,
+                "url": '${urlEsc}',
+                "task": '${taskEsc}',
+                "title": title,
+                "article_text": article_text,
+                "headings": headings,
+                "links": links,
+                "engine_used": "camoufox",
+                "textLength": len(article_text),
+            }
+    except Exception as e:
+        return {"success": False, "error": str(e), "engine_used": "camoufox"}
 
-result = deep_fetch('${urlEsc}', '${taskEsc}')
+result = run()
 print(json.dumps(result, ensure_ascii=False))
 `;
 
-  const shellResult = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
-
-  // لوج AX Tree status
-  if (shellResult.success && shellResult.stdout) {
-    try {
-      const parsed = JSON.parse(shellResult.stdout.trim());
-      log('info', 'browser',
-        `ax_tree_used=${parsed.ax_tree_used} | ax_tree_error=${parsed.ax_tree_error || 'none'} | textLen=${parsed.textLength}`
-      );
-      return { type: 'browser', ...parsed };
-    } catch {
-      return { success: false, type: 'browser', error: 'JSON parse failed', raw: shellResult.stdout?.slice(0, 200) };
-    }
+  const r = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
+  if (!r.success) {
+    log('warn','browser',`Camoufox shell failed: ${r.error?.slice(0,80)} — falling back to requests`);
+    return executeRequestsFetch(url, task);  // fallback تلقائي
   }
 
-  return { success: false, type: 'browser', error: shellResult.error };
+  try {
+    const parsed = JSON.parse(r.stdout.trim());
+    log('info','browser',`engine=${parsed.engine_used} textLen=${parsed.textLength} success=${parsed.success}`);
+    if (!parsed.success) {
+      log('warn','browser',`Camoufox failed: ${parsed.error} — falling back to requests`);
+      return executeRequestsFetch(url, task);
+    }
+    return { type:'browser', ...parsed };
+  } catch {
+    log('warn','browser','JSON parse failed — falling back to requests');
+    return executeRequestsFetch(url, task);
+  }
+}
+
+async function executeRequestsFetch(url, task) {
+  const urlEsc  = url.replace(/'/g, "\\'");
+  const taskEsc = task.replace(/'/g, "\\'");
+
+  const script = `
+import json, sys, re
+
+try:
+    import urllib.request
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ar,en;q=0.9",
+        "Accept-Encoding": "identity",
+    }
+    req = urllib.request.Request('${urlEsc}', headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read().decode('utf-8', errors='ignore')
+
+    # إزالة scripts و styles
+    raw = re.sub(r'<script[^>]*>.*?</script>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+    raw = re.sub(r'<style[^>]*>.*?</style>',  ' ', raw, flags=re.DOTALL|re.IGNORECASE)
+
+    # استخراج العنوان
+    title_m = re.search(r'<title[^>]*>(.*?)</title>', raw, re.IGNORECASE|re.DOTALL)
+    title = title_m.group(1).strip() if title_m else ''
+
+    # إزالة باقي الـ tags
+    text = re.sub(r'<[^>]+>', ' ', raw)
+    text = re.sub(r'&[a-zA-Z]+;', ' ', text)
+    text = re.sub(r'\\s+', ' ', text).strip()[:6000]
+
+    # استخراج الروابط
+    links = []
+    for m in re.finditer(r'href=["\\'](https?://[^"\\'\\s]+)["\\'"]', raw):
+        links.append({"href": m.group(1)})
+    links = links[:15]
+
+    print(json.dumps({
+        "success": True,
+        "url": '${urlEsc}',
+        "task": '${taskEsc}',
+        "title": title,
+        "article_text": text,
+        "text": text,
+        "headings": [],
+        "links": links,
+        "engine_used": "requests",
+        "textLength": len(text),
+    }, ensure_ascii=False))
+
+except Exception as e:
+    print(json.dumps({"success": False, "error": str(e), "engine_used": "requests"}))
+`;
+
+  const r = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
+  if (!r.success) {
+    return { success:false, type:'browser', error:r.error, engine_used:'requests' };
+  }
+
+  try {
+    const parsed = JSON.parse(r.stdout.trim());
+    log('info','browser',`requests engine — textLen=${parsed.textLength} success=${parsed.success}`);
+    return { type:'browser', ...parsed };
+  } catch {
+    return { success:false, type:'browser', error:'JSON parse failed', engine_used:'requests' };
+  }
 }

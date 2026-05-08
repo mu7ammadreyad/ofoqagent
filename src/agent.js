@@ -1,5 +1,5 @@
-// agent.js — OFOQ Agent v6.2
-// معمارية: Plan-and-Solve + Reflexion
+// agent.js — OFOQ BICAMERAL SOVEREIGN v7
+// معمارية: LOGOS × PATHOS — عقلان يفكران معاً
 // Actions: shell | browser | update_memory | schedule_task | cancel_task
 
 import {
@@ -14,414 +14,285 @@ const GEMINI_KEY = process.env.GEMINI_API_KEY;
 const UID        = process.env.CONV_UID;
 const CONV_ID    = process.env.CONV_ID;
 
-if (!GEMINI_KEY) { console.error('❌ GEMINI_API_KEY missing'); process.exit(1); }
-if (!UID)        { console.error('❌ CONV_UID missing');        process.exit(1); }
-if (!CONV_ID)    { console.error('❌ CONV_ID missing');         process.exit(1); }
+if (!GEMINI_KEY) { console.error('GEMINI_API_KEY missing'); process.exit(1); }
+if (!UID)        { console.error('CONV_UID missing');        process.exit(1); }
+if (!CONV_ID)    { console.error('CONV_ID missing');         process.exit(1); }
 
-// ================================================================
-// SECTION 1 — ACTION PARSER
-// يدعم: shell | browser | update_memory | schedule_task | cancel_task
-// ================================================================
-function parseActions(text) {
-  const actions = [];
-  const re = /<action\s+([^>]*)>([\s\S]*?)<\/action>/gi;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    const attrsStr = m[1], body = m[2].trim();
-    const attrs = {};
-    const ar = /(\w+)=["']([^"']*)["']/g; let am;
-    while ((am = ar.exec(attrsStr)) !== null) attrs[am[1]] = am[2];
-    const type = (attrs.type || '').toLowerCase();
-
-    if (type === 'shell')         actions.push({ type: 'shell',  script: body });
-    if (type === 'update_memory') actions.push({ type: 'update_memory', content: body });
-    if (type === 'browser') {
-      try   { actions.push({ type: 'browser', config: JSON.parse(body) }); }
-      catch { actions.push({ type: 'browser', config: null, parseError: 'JSON invalid' }); }
-    }
-    if (type === 'schedule_task') {
-      try   { actions.push({ type: 'schedule_task', config: JSON.parse(body) }); }
-      catch (e) { actions.push({ type: 'schedule_task', config: null, parseError: e.message }); }
-    }
-    if (type === 'cancel_task') {
-      actions.push({ type: 'cancel_task', task_id: attrs.task_id || body.trim() });
-    }
-  }
-  return actions;
-}
-
-function extractText(text) {
-  return text.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi, '').trim();
-}
-
-// ================================================================
-// SECTION 2 — MODEL CALL (بدون timeout)
-// ================================================================
-async function callModel(messages, systemInstruction, attempt = 0) {
-  const model = 'gemma-4-26b-a4b-it';
-  const url   = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
-  const clean = messages
-    .map(m => ({ role: m.role, parts: (m.parts || []).filter(p => !p.thought) }))
+// ── MODEL CALL ──────────────────────────────────────────────────
+async function callModel(messages, sysInst, opts = {}, attempt = 0) {
+  const model  = opts.model || 'gemma-4-26b-a4b-it';
+  const temp   = opts.temperature ?? 0.35;
+  const tokens = opts.maxTokens    ?? 4096;
+  const url    = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`;
+  const clean  = messages
+    .map(m => ({ role:m.role, parts:(m.parts||[]).filter(p=>!p.thought) }))
     .filter(m => m.parts.length);
 
   let resp;
   try {
     resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         contents: clean,
-        systemInstruction: { parts: [{ text: systemInstruction }] },
-        generationConfig: { temperature: 0.3, maxOutputTokens: 4096, topP: 0.95 },
+        systemInstruction: { parts:[{ text:sysInst }] },
+        generationConfig: { temperature:temp, maxOutputTokens:tokens, topP:0.95 },
       }),
     });
-  } catch (e) {
+  } catch(e) {
     if (attempt < 4) {
-      const wait = [1000, 3000, 6000, 12000][attempt];
-      log('warn', 'agent', `fetch failed → retry ${wait}ms`);
-      await sleep(wait);
-      return callModel(messages, systemInstruction, attempt + 1);
+      const w = [1000,3000,6000,12000][attempt];
+      await sleep(w);
+      return callModel(messages, sysInst, opts, attempt+1);
     }
     throw new Error(`AI unreachable: ${e.message}`);
   }
 
   if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    if ((resp.status === 429 || resp.status === 503) && attempt < 4) {
-      const wait = [2000, 5000, 10000, 20000][attempt];
-      log('warn', 'agent', `HTTP ${resp.status} → retry ${wait}ms`);
-      await sleep(wait);
-      return callModel(messages, systemInstruction, attempt + 1);
+    const err = await resp.json().catch(()=>({}));
+    if ((resp.status===429||resp.status===503) && attempt<4) {
+      const w = [2000,5000,10000,20000][attempt];
+      await sleep(w);
+      return callModel(messages, sysInst, opts, attempt+1);
     }
-    throw new Error(`${model} ${resp.status}: ${JSON.stringify(err).slice(0, 150)}`);
+    throw new Error(`${model} ${resp.status}: ${JSON.stringify(err).slice(0,150)}`);
   }
 
   const data = await resp.json();
-  return data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+  return data.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('') || '';
 }
 
-// ================================================================
-// SECTION 3 — PLAN PASS
-// أول استدعاء للنموذج = وضع خطة كاملة قبل التنفيذ
-// ================================================================
-async function planPass(userMsg, systemMd, currentMemory) {
-  const now = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
-  const planPrompt = `${systemMd}
+// ── ACTION PARSER ───────────────────────────────────────────────
+function parseActions(text) {
+  const actions = [];
+  const re = /<action\s+([^>]*)>([\s\S]*?)<\/action>/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const attrsStr=m[1], body=m[2].trim();
+    const attrs={};
+    const ar=/(\w+)=["']([^"']*)["']/g; let am;
+    while ((am=ar.exec(attrsStr))!==null) attrs[am[1]]=am[2];
+    const type=(attrs.type||'').toLowerCase();
+    if (type==='shell')         actions.push({type:'shell',script:body});
+    if (type==='update_memory') actions.push({type:'update_memory',content:body});
+    if (type==='browser') {
+      try   { actions.push({type:'browser',config:JSON.parse(body)}); }
+      catch { actions.push({type:'browser',config:null,parseError:'JSON invalid'}); }
+    }
+    if (type==='schedule_task') {
+      try   { actions.push({type:'schedule_task',config:JSON.parse(body)}); }
+      catch(e) { actions.push({type:'schedule_task',config:null,parseError:e.message}); }
+    }
+    if (type==='cancel_task') actions.push({type:'cancel_task',task_id:attrs.task_id||body.trim()});
+  }
+  return actions;
+}
+function extractText(t) { return t.replace(/<action\s[^>]*>[\s\S]*?<\/action>/gi,'').trim(); }
 
----
-## ذاكرتك الحالية:
-\`\`\`
-${currentMemory}
-\`\`\`
-**الوقت:** ${now}
+// ── BICAMERAL DELIBERATION ──────────────────────────────────────
+// LOGOS (تحليل بارد) + PATHOS (فهم إنساني) يعملان بالتوازي
+async function bicameralDeliberation(userMsg, systemMd, currentMemory, history) {
+  const now = new Date().toLocaleString('ar-EG',{timeZone:'Africa/Cairo'});
+  const ctx = `الوقت: ${now}
+ذاكرة الركيزة المعرفية (مختصر):
+${currentMemory.slice(0,1800)}
+آخر رسائل المحادثة:
+${history.slice(-3).map(h=>`${h.role==='user'?'المستخدم':'أفق'}: ${(h.content||'').slice(0,180)}`).join('\n')}
+طلب المستخدم الآن: "${userMsg}"`;
 
----
-## مرحلة التخطيط (Plan-and-Solve)
+  const logosPrompt = `${systemMd}\n\n---\nأنت الآن LOGOS — العقل التحليلي الصارم.\n\n${ctx}\n\nحلّل الطلب منطقياً:\n[LOGOS]\n1. الهدف الحقيقي بالضبط\n2. الخطة خطوة بخطوة\n3. المخاطر (كن devil's advocate)\n4. نفّذ أول action إذا لزم الأمر\n\nابدأ بـ [LOGOS] مباشرة.`;
 
-المستخدم طلب:
-"${userMsg}"
+  const pathosPrompt = `${systemMd}\n\n---\nأنت الآن PATHOS — العقل الإنساني المتعاطف.\n\n${ctx}\n\n[PATHOS]\nما الذي يريده المستخدم حقاً خلف الكلمات؟\nما أسلوب التقديم الأنسب لشخصيته؟\nما البُعد الإنساني الذي يخدمه؟\n\nابدأ بـ [PATHOS] مباشرة. لا تكتب actions.`;
 
-ضع خطة واضحة قبل التنفيذ:
-1. GOAL: ما الهدف النهائي بالضبط؟
-2. STEPS: ما الخطوات المطلوبة بالترتيب؟
-3. RISKS: ما الذي قد يفشل؟ كيف ستتعامل معه؟
-4. FIRST_ACTION: ما أول action ستنفذه وهل هو shell, browser, schedule_task, أم update_memory؟
+  log('info','agent','BICAMERAL: calling LOGOS + PATHOS in parallel');
+  const [logosRaw, pathosRaw] = await Promise.all([
+    callModel([{role:'user',parts:[{text:logosPrompt}]}], systemMd.slice(0,1500), {temperature:0.2,maxTokens:1500}),
+    callModel([{role:'user',parts:[{text:pathosPrompt}]}], systemMd.slice(0,1500), {temperature:0.55,maxTokens:800}),
+  ]);
 
-اكتب الخطة باختصار ثم ابدأ بأول action مباشرة.`;
-
-  return callModel(
-    [{ role: 'user', parts: [{ text: planPrompt }] }],
-    systemMd.slice(0, 2000),  // system instruction مختصر للـ plan pass
-  );
+  log('info','agent',`LOGOS(${logosRaw.length}ch) PATHOS(${pathosRaw.length}ch)`);
+  await appendToConv(UID, CONV_ID, 'thinking_chunks', `${logosRaw}\n\n${pathosRaw}`);
+  return { logosRaw, pathosRaw };
 }
 
-// ================================================================
-// SECTION 4 — REFLEXION PROMPT
-// بعد كل نتيجة، النموذج يتأمل ويقرر
-// ================================================================
-function buildReflexionPrompt(actionResults, round, maxRounds) {
-  return `نتائج الـ actions (الجولة ${round}/${maxRounds}):
-${JSON.stringify(actionResults, null, 2)}
-
-[REFLEXION — قرار مطلوب الآن]
-إذا تبقى خطوات → نفّذها بـ <action> مباشرة بدون مقدمة.
-إذا فشل شيء → جرّب البديل بـ <action> مباشرة.
-إذا اكتملت المهمة → اكتب ===FINAL_ANSWER=== ثم الرد كاملاً.
-
-مهم جداً:
-- لا تكتب أي تحليل أو تفكير داخلي في الرد
-- لا تكتب بالإنجليزية إلا في الأكواد
-- إذا اخترت ===FINAL_ANSWER=== لا تضف أي action بعدها`;
+// ── SYSTEM INSTRUCTION ──────────────────────────────────────────
+function buildSysInst(systemMd, currentMemory) {
+  const now = new Date().toLocaleString('ar-EG',{timeZone:'Africa/Cairo'});
+  return `${systemMd}\n\n---\n## الذاكرة الحالية:\n\`\`\`\n${currentMemory}\n\`\`\`\n**الوقت:** ${now}\n**تذكر:** LOGOS × PATHOS — نفّذ بـ actions، وعند الاكتمال: ===FINAL_ANSWER===`;
 }
 
-// الـ Synthesis Pass: استخلاص الرد النهائي فقط
+// ── REFLEXION PROMPT ────────────────────────────────────────────
+function buildReflexion(results, round, max) {
+  return `نتائج الـ actions (الجولة ${round}/${max}):\n${JSON.stringify(results,null,2)}\n\n[REFLEXION]\nLOGOS: هل النتيجة صحيحة؟ هل تبقى خطوات؟\nPATHOS: هل هذا سيُرضي المستخدم حقاً؟\n\nإذا تبقى خطوات → <action> مباشرة.\nإذا فشل → جرّب البديل بـ <action>.\nإذا اكتملت → ===FINAL_ANSWER=== ثم الرد بالعربية المباشرة.`;
+}
+
+// ── SYNTHESIS PASS ──────────────────────────────────────────────
 async function synthesisPass(messages, systemMd, currentMemory) {
-  const sysInst = buildSystemInstruction(systemMd, currentMemory);
-  const synthPrompt = `بناءً على كل ما سبق، اكتب الرد النهائي للمستخدم الآن.
-
-قواعد صارمة:
-- ابدأ مباشرة بالمحتوى — لا مقدمة ولا "لقد قمت بـ"
-- اكتب بالعربية فقط (الأكواد استثناء)
-- نسّق الرد جيداً بالـ markdown
-- لا تذكر الأدوات أو الـ actions أو الـ shell في الرد
-- لا تكتب أي <action> في هذا الرد`;
-
   const synth = await callModel(
-    [...messages, { role: 'user', parts: [{ text: synthPrompt }] }],
-    sysInst,
+    [...messages,{role:'user',parts:[{text:'اكتب الرد النهائي للمستخدم الآن.\n- ابدأ مباشرة بالمحتوى\n- بالعربية فقط\n- markdown منسّق\n- لا تذكر الأدوات أو shell\n- لا <action>'}]}],
+    buildSysInst(systemMd, currentMemory),
+    {temperature:0.4},
   );
   return synth.trim();
 }
 
-// ================================================================
-// SECTION 5 — SYSTEM INSTRUCTION BUILDER
-// ================================================================
-function buildSystemInstruction(systemMd, currentMemory) {
-  const now = new Date().toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' });
-  return [
-    systemMd,
-    '\n\n---\n## ذاكرتك الحالية (memory.md):\n```\n',
-    currentMemory,
-    '\n```',
-    `\n\n**الوقت الحالي:** ${now}`,
-    '\n\n**تذكر:** Plan-and-Solve + Reflexion — فكّر قبل التنفيذ، تأمّل بعد كل نتيجة.',
-  ].join('');
-}
-
-// ================================================================
-// SECTION 6 — EXECUTE ONE ACTION
-// ================================================================
+// ── EXECUTE ACTION ──────────────────────────────────────────────
 async function executeAction(action, uid, convId) {
-  // ── shell ──────────────────────────────────────────────────────
-  if (action.type === 'shell') {
-    log('info', 'agent', `[shell] ${action.script.slice(0, 60)}...`);
-    await appendToConv(uid, convId, 'tool_updates', '⚙️ جارٍ التنفيذ...');
-    const result = await executeShell(action.script);
-    const label  = result.success
-      ? `✅ ${result.stdout?.slice(0, 100) || 'تم'}`
-      : `❌ ${result.error?.slice(0, 100)}`;
-    await appendToConv(uid, convId, 'tool_updates', label);
-    return { type: 'shell', success: result.success,
-      stdout: result.stdout?.slice(0, 4000), stderr: result.stderr?.slice(0, 800),
-      error: result.error, exit_code: result.exit_code };
+  if (action.type==='shell') {
+    log('info','agent',`[shell] ${action.script.slice(0,60)}...`);
+    await appendToConv(uid,convId,'tool_updates','⚙️ جارٍ التنفيذ...');
+    const r = await executeShell(action.script);
+    await appendToConv(uid,convId,'tool_updates', r.success?`✅ ${r.stdout?.slice(0,100)||'تم'}`:`❌ ${r.error?.slice(0,100)}`);
+    return {type:'shell',success:r.success,stdout:r.stdout?.slice(0,4000),stderr:r.stderr?.slice(0,800),error:r.error,exit_code:r.exit_code};
   }
 
-  // ── browser ────────────────────────────────────────────────────
-  if (action.type === 'browser') {
-    if (action.parseError) return { type: 'browser', success: false, error: action.parseError };
-    log('info', 'agent', `[browser] ${action.config.url}`);
-    await appendToConv(uid, convId, 'tool_updates', `🌐 جارٍ فتح ${action.config.url}...`);
-    const result = await executeBrowser(action.config.url, action.config.task || '');
-    const label  = result.success
-      ? `✅ تم جلب الصفحة (${result.textLength || 0} حرف)`
-      : `❌ ${result.error?.slice(0, 80)}`;
-    await appendToConv(uid, convId, 'tool_updates', label);
-    return result;
+  if (action.type==='browser') {
+    if (action.parseError) return {type:'browser',success:false,error:action.parseError};
+    const {url,task='',engine='camoufox'} = action.config;
+    log('info','agent',`[browser:${engine}] ${url}`);
+    await appendToConv(uid,convId,'tool_updates',`🌐 ${engine}: ${url.slice(0,55)}...`);
+    const r = await executeBrowser(url, task, engine);
+    await appendToConv(uid,convId,'tool_updates', r.success?`✅ ${engine} — ${r.textLength||0} حرف`:`❌ ${r.error?.slice(0,80)}`);
+    return r;
   }
 
-  // ── update_memory ──────────────────────────────────────────────
-  if (action.type === 'update_memory') {
-    log('info', 'agent', `[update_memory] ${action.content.length}ch`);
-    await appendToConv(uid, convId, 'tool_updates', '💾 تحديث الذاكرة...');
+  if (action.type==='update_memory') {
+    log('info','agent',`[update_memory] ${action.content.length}ch`);
+    await appendToConv(uid,convId,'tool_updates','💾 تحديث الذاكرة...');
     try {
       await saveMemory(uid, action.content);
-      await appendToConv(uid, convId, 'tool_updates', '✅ تم حفظ memory.md');
-      return { type: 'update_memory', success: true, size: action.content.length };
-    } catch (e) {
-      await appendToConv(uid, convId, 'tool_updates', `❌ فشل الحفظ: ${e.message.slice(0, 60)}`);
-      return { type: 'update_memory', success: false, error: e.message };
+      await appendToConv(uid,convId,'tool_updates','✅ تم حفظ الذاكرة');
+      return {type:'update_memory',success:true,size:action.content.length};
+    } catch(e) {
+      await appendToConv(uid,convId,'tool_updates',`❌ ${e.message.slice(0,60)}`);
+      return {type:'update_memory',success:false,error:e.message};
     }
   }
 
-  // ── schedule_task ──────────────────────────────────────────────
-  if (action.type === 'schedule_task') {
-    if (action.parseError) return { type: 'schedule_task', success: false, error: action.parseError };
-    log('info', 'agent', `[schedule_task] "${action.config.title}"`);
-    await appendToConv(uid, convId, 'tool_updates', `📅 جدولة: "${action.config.title}"...`);
+  if (action.type==='schedule_task') {
+    if (action.parseError) return {type:'schedule_task',success:false,error:action.parseError};
+    log('info','agent',`[schedule_task] "${action.config.title}"`);
+    await appendToConv(uid,convId,'tool_updates',`📅 جدولة: "${action.config.title}"...`);
     try {
-      const result = await createScheduledTask(uid, action.config);
-      await appendToConv(uid, convId, 'tool_updates', `✅ جُدولت — التالية: ${result.nextRun}`);
-      return { type: 'schedule_task', success: true, ...result, title: action.config.title };
-    } catch (e) {
-      await appendToConv(uid, convId, 'tool_updates', `❌ فشل: ${e.message.slice(0, 60)}`);
-      return { type: 'schedule_task', success: false, error: e.message };
+      const r = await createScheduledTask(uid, action.config);
+      await appendToConv(uid,convId,'tool_updates',`✅ جُدولت — التالية: ${r.nextRun}`);
+      return {type:'schedule_task',success:true,...r,title:action.config.title};
+    } catch(e) {
+      await appendToConv(uid,convId,'tool_updates',`❌ ${e.message.slice(0,60)}`);
+      return {type:'schedule_task',success:false,error:e.message};
     }
   }
 
-  // ── cancel_task ────────────────────────────────────────────────
-  if (action.type === 'cancel_task') {
-    log('info', 'agent', `[cancel_task] ${action.task_id}`);
-    await appendToConv(uid, convId, 'tool_updates', `🛑 إيقاف ${action.task_id}...`);
+  if (action.type==='cancel_task') {
+    log('info','agent',`[cancel_task] ${action.task_id}`);
+    await appendToConv(uid,convId,'tool_updates',`🛑 إيقاف ${action.task_id}...`);
     try {
       await toggleScheduledTask(uid, action.task_id, false);
-      await appendToConv(uid, convId, 'tool_updates', '✅ تم الإيقاف');
-      return { type: 'cancel_task', success: true, task_id: action.task_id };
-    } catch (e) {
-      return { type: 'cancel_task', success: false, error: e.message };
+      await appendToConv(uid,convId,'tool_updates','✅ تم الإيقاف');
+      return {type:'cancel_task',success:true,task_id:action.task_id};
+    } catch(e) {
+      return {type:'cancel_task',success:false,error:e.message};
     }
   }
 
-  return { type: action.type, success: false, error: 'نوع action غير معروف' };
+  return {type:action.type,success:false,error:'نوع action غير معروف'};
 }
 
-// ================================================================
-// SECTION 7 — PLAN-AND-SOLVE + REFLEXION LOOP
-// ================================================================
-async function psrLoop(uid, convId, userMsg, history, systemMd) {
+// ── BICAMERAL MAIN LOOP ─────────────────────────────────────────
+async function bicameralLoop(uid, convId, userMsg, history, systemMd) {
   let currentMemory = await loadMemory(uid);
   let memUpdated    = false;
 
-  // ── Phase 1: PLAN ─────────────────────────────────────────────
-  log('info', 'agent', 'Phase 1: PLAN');
-  await appendToConv(uid, convId, 'tool_updates', '🧠 جارٍ وضع الخطة...');
-  const planText = await planPass(userMsg, systemMd, currentMemory);
-  const planActions = parseActions(planText);
-  const planOnly    = extractText(planText);
+  // Phase 1: DELIBERATION (متوازٍ)
+  await updateConv(uid,convId,{status:'thinking'});
+  await appendToConv(uid,convId,'tool_updates','🧠 LOGOS × PATHOS يتشاوران...');
+  const {logosRaw,pathosRaw} = await bicameralDeliberation(userMsg,systemMd,currentMemory,history);
 
-  if (planOnly) await appendToConv(uid, convId, 'thinking_chunks', `[PLAN]\n${planOnly}`);
-  log('info', 'agent', `Plan: ${planOnly.slice(0, 120)}`);
+  await updateConv(uid,convId,{status:'running'});
 
-  // ── Phase 2: EXECUTE + REFLEXION LOOP ─────────────────────────
+  // جمع actions من LOGOS
+  let pendingActions = parseActions(logosRaw);
   const messages = [
-    ...history.filter(m => m.content).map(m => ({
-      role:  m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: m.content }],
-    })),
-    { role: 'user',  parts: [{ text: userMsg }] },
-    { role: 'model', parts: [{ text: planText }] },
+    ...history.filter(m=>m.content).map(m=>({role:m.role==='user'?'user':'model',parts:[{text:m.content}]})),
+    {role:'user',  parts:[{text:userMsg}]},
+    {role:'model', parts:[{text:`[LOGOS]\n${logosRaw}\n\n[PATHOS]\n${pathosRaw}`}]},
   ];
 
-  let finalText = '';
-  const MAX_ROUNDS = 15;
-
-  // إذا لم يكن في الـ plan actions → synthesis مباشر
-  if (!planActions.length) {
-    const finalText = await synthesisPass(
-      [
-        ...history.filter(m => m.content).map(m => ({
-          role: m.role === 'user' ? 'user' : 'model',
-          parts: [{ text: m.content }],
-        })),
-        { role: 'user',  parts: [{ text: userMsg }] },
-        { role: 'model', parts: [{ text: planText }] },
-      ],
-      systemMd, currentMemory,
-    );
-    return buildResult(history, userMsg, finalText, memUpdated);
+  if (!pendingActions.length) {
+    const finalText = await synthesisPass(messages, systemMd, currentMemory);
+    return {finalText, updatedHistory:[...history,{role:'user',content:userMsg},{role:'assistant',content:finalText}], memUpdated};
   }
 
-  // نفّذ الـ actions من الـ plan
-  let pendingActions = planActions;
+  let finalText = '';
+  const MAX = 15;
 
-  for (let round = 0; round < MAX_ROUNDS; round++) {
-    log('info', 'agent', `EXECUTE round ${round + 1}/${MAX_ROUNDS} — ${pendingActions.length} actions`);
+  for (let round = 0; round < MAX; round++) {
+    log('info','agent',`EXECUTE round ${round+1}/${MAX} — ${pendingActions.length} actions`);
 
-    // تنفيذ جميع الـ actions
     const results = [];
     for (const action of pendingActions) {
-      const result = await executeAction(action, uid, convId);
-      results.push(result);
-
-      // تحديث الذاكرة المحلية إذا نجح update_memory
-      if (action.type === 'update_memory' && result.success) {
-        currentMemory = action.content;
-        memUpdated    = true;
+      const r = await executeAction(action, uid, convId);
+      results.push(r);
+      if (action.type==='update_memory' && r.success) {
+        currentMemory = action.content; memUpdated = true;
       }
     }
 
-    // ── REFLEXION ──────────────────────────────────────────────
-    log('info', 'agent', `Phase REFLEXION — round ${round + 1}`);
-    const reflexionMsg = buildReflexionPrompt(results, round + 1, MAX_ROUNDS);
-    messages.push({
-      role:  'user',
-      parts: [{ text: reflexionMsg }],
-    });
-
-    const sysInst  = buildSystemInstruction(systemMd, currentMemory);
-    const nextStep = await callModel(messages, sysInst);
-    log('info', 'agent', `Reflexion response (${nextStep.length}ch): ${nextStep.slice(0, 80)}`);
+    log('info','agent',`REFLEXION round ${round+1}`);
+    const sysInst = buildSysInst(systemMd, currentMemory);
+    messages.push({role:'user',parts:[{text:buildReflexion(results,round+1,MAX)}]});
+    const nextStep = await callModel(messages, sysInst, {temperature:0.3});
+    log('info','agent',`Reflexion(${nextStep.length}ch): ${nextStep.slice(0,80)}`);
 
     const nextActions = parseActions(nextStep);
     const nextText    = extractText(nextStep);
+    if (nextText) await appendToConv(uid,convId,'thinking_chunks',`[r${round+1}]\n${nextText}`);
+    messages.push({role:'model',parts:[{text:nextStep}]});
 
-    // التفكير الداخلي → thinking_chunks فقط (لا يظهر في الرد)
-    if (nextText) await appendToConv(uid, convId, 'thinking_chunks', `[REFLEXION r${round+1}]\n${nextText}`);
-
-    messages.push({ role: 'model', parts: [{ text: nextStep }] });
-
-    // تحقق من ===FINAL_ANSWER=== marker
-    const finalMarkerIdx = nextStep.indexOf('===FINAL_ANSWER===');
-    if (finalMarkerIdx !== -1) {
-      // استخرج ما بعد الـ marker مباشرة
-      const candidate = nextStep.slice(finalMarkerIdx + 18).replace(/<action[\s\S]*?<\/action>/gi, '').trim();
+    const markerIdx = nextStep.indexOf('===FINAL_ANSWER===');
+    if (markerIdx !== -1) {
+      const candidate = nextStep.slice(markerIdx+18).replace(/<action[\s\S]*?<\/action>/gi,'').trim();
       finalText = candidate || await synthesisPass(messages, systemMd, currentMemory);
       break;
     }
-
-    // لا actions ولا FINAL_ANSWER → synthesis pass لضمان نقاء الرد
     if (!nextActions.length) {
       finalText = await synthesisPass(messages, systemMd, currentMemory);
       break;
     }
-
     pendingActions = nextActions;
   }
 
   if (!finalText) finalText = '⚠️ وصلت للحد الأقصى من الجولات — راجع tool_updates لتفاصيل ما تم.';
-  return buildResult(history, userMsg, finalText, memUpdated);
-}
 
-function buildResult(history, userMsg, finalText, memUpdated) {
   return {
     finalText,
-    updatedHistory: [
-      ...history,
-      { role: 'user',      content: userMsg },
-      { role: 'assistant', content: finalText },
-    ],
+    updatedHistory:[...history,{role:'user',content:userMsg},{role:'assistant',content:finalText}],
     memUpdated,
   };
 }
 
-// ================================================================
-// MAIN
-// ================================================================
+// ── MAIN ────────────────────────────────────────────────────────
 async function main() {
-  log('info', 'agent', `Starting — uid=${UID?.slice(0,8)} conv=${CONV_ID}`);
-
+  log('info','agent',`BICAMERAL v7 — uid=${UID?.slice(0,8)} conv=${CONV_ID}`);
   const systemMd = readSkill('system.md');
-  if (!systemMd) { log('error', 'agent', 'skills/system.md not found'); process.exit(1); }
+  if (!systemMd) { log('error','agent','skills/system.md not found'); process.exit(1); }
 
-  await updateConv(UID, CONV_ID, { status: 'thinking' });
+  await updateConv(UID,CONV_ID,{status:'thinking'});
+  const conv = await getConv(UID,CONV_ID);
+  if (!conv) { log('error','agent','Conversation not found'); process.exit(1); }
 
-  const conv = await getConv(UID, CONV_ID);
-  if (!conv) { log('error', 'agent', 'Conversation not found'); process.exit(1); }
-
-  const userMsg = conv.user_message;
-  const history = conv.history || [];
-
-  await updateConv(UID, CONV_ID, { status: 'running' });
-
-  const { finalText, updatedHistory, memUpdated } = await psrLoop(
-    UID, CONV_ID, userMsg, history, systemMd,
+  const {finalText,updatedHistory,memUpdated} = await bicameralLoop(
+    UID,CONV_ID, conv.user_message, conv.history||[], systemMd,
   );
 
-  await saveConv(UID, CONV_ID, {
-    status:         'done',
-    final_response: finalText,
-    history:        updatedHistory,
-    finished_at:    new Date().toISOString(),
+  await saveConv(UID,CONV_ID,{
+    status:'done', final_response:finalText,
+    history:updatedHistory, finished_at:new Date().toISOString(),
   });
-
-  log('ok', 'agent', `Done — memUpdated=${memUpdated} history=${updatedHistory.length}`);
+  log('ok','agent',`Done BICAMERAL — memUpdated=${memUpdated} msgs=${updatedHistory.length}`);
 }
 
-main().catch(async (e) => {
-  log('error', 'agent', 'Fatal', { error: e.message });
-  try {
-    await saveConv(UID, CONV_ID, {
-      status: 'error', error: e.message, finished_at: new Date().toISOString(),
-    });
-  } catch {}
+main().catch(async e => {
+  log('error','agent','Fatal',{error:e.message});
+  try { await saveConv(UID,CONV_ID,{status:'error',error:e.message,finished_at:new Date().toISOString()}); } catch {}
   process.exit(1);
 });
