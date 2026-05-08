@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>أفق | OFOQ Agent</title>
+<title>أفق | BICAMERAL SOVEREIGN</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -13,7 +13,8 @@
 /* ════ TOKENS ════ */
 :root{
   --bg:#f8f8f8;--surface:#ffffff;--border:#e8e8e8;--text:#111111;
-  --text-sub:#666666;--text-inv:#ffffff;--accent:#8b5cf6;--accent-dim:#ede9fe;
+  --text-sub:#666666;--text-inv:#ffffff;
+  --accent:#1a1a1a;--accent-dim:#f0f0f0;
   --error:#ef4444;--ok:#10b981;
   --font-body:'IBM Plex Sans Arabic',sans-serif;
   --font-mono:'IBM Plex Mono',monospace;
@@ -23,7 +24,7 @@
 }
 [data-theme="dark"]{
   --bg:#0f0f0f;--surface:#161616;--border:#272727;
-  --text:#f0f0f0;--text-sub:#888888;--accent-dim:#2e1a5a;
+  --text:#f0f0f0;--text-sub:#888888;--accent:#e8e8e8;--accent-dim:#222222;
 }
 [data-theme="dark"] .msg-user .bubble{background:#202020!important;color:#ebebeb!important;}
 
@@ -49,7 +50,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
 .login-input{width:100%;padding:12px 16px;border:1px solid var(--border);border-radius:var(--r-md);
   font-size:15px;background:var(--surface);color:var(--text);outline:none;
   font-family:var(--font-body);transition:border-color .2s;}
-.login-input:focus{border-color:var(--accent);}
+.login-input:focus{border-color:var(--text);}
 .btn-primary{width:100%;padding:13px;background:var(--text);color:var(--text-inv);border:none;
   border-radius:var(--r-md);font-size:15px;font-weight:600;cursor:pointer;
   font-family:var(--font-body);transition:opacity .2s;}
@@ -121,7 +122,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
   transition:background .15s;min-height:34px;
 }
 .history-item:hover,.sched-item:hover{background:var(--surface);}
-.history-item.active{background:var(--accent-dim);color:var(--accent);}
+.history-item.active{background:var(--accent-dim);color:var(--text);font-weight:500;}
 .hi-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;}
 .hi-del{
   opacity:0;cursor:pointer;flex-shrink:0;font-size:12px;
@@ -138,8 +139,8 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
   transition:background .15s;min-height:32px;
 }
 .sched-dot{
-  width:6px;height:6px;border-radius:50%;background:var(--accent);
-  flex-shrink:0;opacity:.7;
+  width:6px;height:6px;border-radius:50%;background:var(--text);
+  flex-shrink:0;opacity:.45;
 }
 .sched-dot.inactive{background:var(--text-sub);opacity:.4;}
 .sched-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;}
@@ -201,7 +202,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
   padding:10px 14px 10px;border-radius:4px 14px 14px 14px;
   background:transparent;
   border:1px solid var(--border);
-  border-right:2px solid var(--accent);
+  border-right:2px solid var(--text-sub);
   font-family:var(--font-mono);font-size:11.5px;color:var(--text-sub);
   line-height:1.7;max-width:calc(100% - 40px);word-break:break-word;direction:rtl;
   max-height:200px;overflow-y:auto;
@@ -211,13 +212,13 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
 .think-content::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
 .think-label{
   font-size:9.5px;font-weight:600;text-transform:uppercase;
-  letter-spacing:.9px;color:var(--accent);opacity:.7;
+  letter-spacing:.9px;color:var(--text-sub);opacity:.6;
   margin-bottom:7px;display:flex;align-items:center;gap:5px;
 }
 .think-label i{font-size:11px;}
 .think-dots{display:inline-flex;gap:5px;align-items:center;height:14px;}
 .think-dots span{
-  width:4px;height:4px;border-radius:50%;background:var(--accent);
+  width:4px;height:4px;border-radius:50%;background:var(--text-sub);
   opacity:.3;animation:blink 1.4s infinite;
 }
 .think-dots span:nth-child(2){animation-delay:.25s;}
@@ -235,7 +236,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
   color:var(--text-sub);font-family:var(--font-mono);
   animation:fadeUp .25s ease;width:fit-content;margin:3px 0;
 }
-.upd-dot{width:5px;height:5px;border-radius:50%;background:var(--accent);
+.upd-dot{width:5px;height:5px;border-radius:50%;background:var(--ok);
   animation:blink .9s infinite;flex-shrink:0;}
 
 /* ════ HERO ════ */
@@ -293,7 +294,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
 /* ════ STATUS BAR ════ */
 .status-bar{position:fixed;top:0;left:0;right:0;height:2px;background:transparent;z-index:100;}
 .status-bar.active{
-  background:linear-gradient(90deg,transparent,var(--accent),transparent);
+  background:linear-gradient(90deg,transparent,var(--text),transparent);
   animation:sweep 1.4s infinite;
 }
 @keyframes sweep{0%{background-position:-100%}100%{background-position:200%}}
@@ -318,7 +319,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
   border-radius:22px;transition:.3s;}
 .toggle-slider::before{content:'';position:absolute;height:16px;width:16px;
   left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s;}
-.toggle input:checked+.toggle-slider{background:var(--accent);}
+.toggle input:checked+.toggle-slider{background:var(--text);}
 .toggle input:checked+.toggle-slider::before{transform:translateX(16px);}
 
 /* ════ ANIMATIONS ════ */
@@ -331,7 +332,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
 .bubble ul,.bubble ol{padding-right:20px;margin:6px 0;}
 .bubble table{border-collapse:collapse;width:100%;margin:8px 0;font-size:13px;}
 .bubble th,.bubble td{border:1px solid var(--border);padding:6px 10px;}
-.bubble blockquote{border-right:3px solid var(--accent);padding-right:12px;color:var(--text-sub);margin:8px 0;}
+.bubble blockquote{border-right:3px solid var(--text-sub);padding-right:12px;color:var(--text-sub);margin:8px 0;}
 </style>
 </head>
 <body>
@@ -349,8 +350,8 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
     </defs>
     <circle cx="250" cy="250" r="175" fill="none" stroke="#111" stroke-width="65"/>
     <g mask="url(#lm)">
-      <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
-      <g filter="url(#lb)"><circle cx="375" cy="160" r="70" fill="#10b981"/><circle cx="440" cy="250" r="75" fill="#3b82f6"/><circle cx="375" cy="340" r="70" fill="#f472b6"/><circle cx="310" cy="250" r="75" fill="#ef4444"/></g>
+      <rect x="230" y="50" width="270" height="400" fill="#1a1a1a"/>
+      <g filter="url(#lb)"><circle cx="375" cy="160" r="70" fill="#555"/><circle cx="440" cy="250" r="75" fill="#333"/><circle cx="375" cy="340" r="70" fill="#777"/><circle cx="310" cy="250" r="75" fill="#444"/></g>
       <rect x="230" y="45" width="270" height="145" fill="url(#lt)"/>
       <rect x="230" y="310" width="270" height="145" fill="url(#lb2)"/>
     </g>
@@ -448,14 +449,14 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
         </defs>
         <circle cx="250" cy="250" r="175" fill="none" stroke="#111" stroke-width="65"/>
         <g mask="url(#hm)">
-          <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
-          <g filter="url(#hb)"><circle cx="375" cy="160" r="70" fill="#10b981"/><circle cx="440" cy="250" r="75" fill="#3b82f6"/><circle cx="375" cy="340" r="70" fill="#f472b6"/><circle cx="310" cy="250" r="75" fill="#ef4444"/></g>
+          <rect x="230" y="50" width="270" height="400" fill="#1a1a1a"/>
+          <g filter="url(#hb)"><circle cx="375" cy="160" r="70" fill="#555"/><circle cx="440" cy="250" r="75" fill="#333"/><circle cx="375" cy="340" r="70" fill="#777"/><circle cx="310" cy="250" r="75" fill="#444"/></g>
           <rect x="230" y="45" width="270" height="145" fill="url(#ht)"/>
           <rect x="230" y="310" width="270" height="145" fill="url(#hb2)"/>
         </g>
       </svg>
       <h1 class="hero-title">أفق — OFOQ Agent</h1>
-      <p class="hero-sub">عميل ذكاء اصطناعي متكامل · يفعل أي شيء · يجدول مهامك تلقائياً</p>
+      <p class="hero-sub">LOGOS × PATHOS — عقلان يفكران معاً · يفعلان أي شيء · يجدولان مهامك</p>
       <div class="chips" id="heroChips">
         <div class="chip" onclick="fillInput('كل يوم الساعة 7 صباحاً أرسل لي آية قرآنية جديدة مع تفسيرها')"><i class="ph ph-clock-countdown"></i> آية يومية</div>
         <div class="chip" onclick="fillInput('كل جمعة الساعة 12 ظهراً أرسل لي حديث نبوي شريف')"><i class="ph ph-calendar-check"></i> حديث أسبوعي</div>
@@ -483,7 +484,7 @@ body{font-family:var(--font-body);background:var(--bg);color:var(--text);
       </div>
       <input type="file" id="fileInput" hidden onchange="handleFileSelect(this)">
       <div class="input-box">
-        <textarea id="userInput" rows="1" placeholder="اكتب رسالتك... أو اطلب جدولة مهمة 📅"
+        <textarea id="userInput" rows="1" placeholder="تحدث مع أفق..."
           oninput="autoResize(this)" onkeydown="handleEnter(event)"></textarea>
         <div class="input-footer">
           <div class="attach-btn" onclick="document.getElementById('fileInput').click()">
@@ -931,7 +932,7 @@ async function dispatchAction(uid, convId) {
         Authorization:`token ${GITHUB_TOKEN}`,
         Accept:'application/vnd.github.v3+json',
         'Content-Type':'application/json',
-        'User-Agent':'OFOQ-Frontend/6.1',
+        'User-Agent':'OFOQ-Frontend/7.0',
       },
       body: JSON.stringify({ event_type:'agent-chat', client_payload:{uid, conv_id:convId} }),
     }
@@ -956,8 +957,8 @@ const LOGO_SVG = `<svg viewBox="0 0 500 500" width="26" height="26" xmlns="http:
   </defs>
   <circle cx="250" cy="250" r="175" fill="none" stroke="currentColor" stroke-width="60"/>
   <g mask="url(#am)">
-    <rect x="230" y="50" width="270" height="400" fill="#8b5cf6"/>
-    <g filter="url(#af)"><circle cx="375" cy="160" r="70" fill="#10b981"/><circle cx="440" cy="250" r="75" fill="#3b82f6"/><circle cx="375" cy="340" r="70" fill="#f472b6"/><circle cx="310" cy="250" r="75" fill="#ef4444"/></g>
+    <rect x="230" y="50" width="270" height="400" fill="#1a1a1a"/>
+    <g filter="url(#af)"><circle cx="375" cy="160" r="70" fill="#555"/><circle cx="440" cy="250" r="75" fill="#333"/><circle cx="375" cy="340" r="70" fill="#777"/><circle cx="310" cy="250" r="75" fill="#444"/></g>
     <rect x="230" y="45" width="270" height="145" fill="url(#at)"/>
     <rect x="230" y="310" width="270" height="145" fill="url(#ab)"/>
   </g>
@@ -982,7 +983,7 @@ function createThinkBubble() {
     <circle cx="250" cy="250" r="175" fill="none" stroke="currentColor" stroke-width="60"/>
   </svg></div>
   <div class="think-content">
-    <div class="think-label"><i class="ph ph-brain"></i> التفكير</div>
+    <div class="think-label"><i class="ph ph-brain"></i> LOGOS × PATHOS</div>
     <div class="think-dots"><span></span><span></span><span></span></div>
     <div class="think-text"></div>
   </div>`;
