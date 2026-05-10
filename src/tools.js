@@ -67,39 +67,6 @@ export async function getDb() {
   return _db;
 }
 
-// ================================================================
-// MEMORY
-// ================================================================
-export async function loadMemory(uid) {
-  try {
-    const db  = await getDb();
-    const doc = await db.doc(`users/${uid}/config/memory`).get();
-    if (doc.exists && doc.data()?.content) return doc.data().content;
-    const template = readSkill('memory.md');
-    if (template) await saveMemory(uid, template);
-    return template || '';
-  } catch (e) {
-    log('error', 'memory', 'loadMemory failed', { error: e.message });
-    return readSkill('memory.md');
-  }
-}
-
-export async function saveMemory(uid, fullContent) {
-  try {
-    const db = await getDb();
-    await db.doc(`users/${uid}/config/memory`).set({
-      content: fullContent, updated_at: new Date().toISOString(),
-    });
-    log('ok', 'memory', `saved (${fullContent.length}ch)`);
-  } catch (e) { log('error', 'memory', 'saveMemory failed', { error: e.message }); throw e; }
-}
-
-export function getMemVal(mem, key) {
-  const line = mem.split('\n').find(l => l.startsWith(`${key}:`));
-  if (!line) return null;
-  const val = line.slice(key.length + 1).trim();
-  return (val === 'null' || val === '') ? null : val;
-}
 
 // ================================================================
 // CONVERSATIONS
