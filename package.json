@@ -1,9 +1,9 @@
 {
   "name": "ofoq-agent",
-  "version": "7.0.0",
+  "version": "3.0.0",
   "type": "module",
   "private": true,
-  "description": "OFOQ BICAMERAL SOVEREIGN v7 — LOGOS × PATHOS, GitHub Actions + Firebase",
+  "description": "OFOQ BICAMERAL SOVEREIGN v3 — LOGOS×PATHOS · Cyber Agent · 4-Layer Memory",
   "engines": {
     "node": ">=20"
   },

@@ -313,224 +313,261 @@ export async function executeShell(script) {
 // ================================================================
 
 // ================================================================
-// BROWSER EXECUTION
-// المستوى 1: Camoufox (Firefox متخفي — يتجاوز bot detection)
-// المستوى 2: requests + html parsing (fallback للمواقع البسيطة)
+// MEMORY v3 — 4 طبقات منفصلة
 // ================================================================
 
 /**
- * تثبيت الأدوات المطلوبة مرة واحدة وتخزين النتيجة
+ * الطبقة 1: CORE — CONFIG + USER_MODEL + STATES
+ * تُقرأ في كل محادثة
  */
-let _browserReady = false;
-async function ensureBrowserTools() {
-  if (_browserReady) return true;
-  const check = await executeShell(`python3 -c "import camoufox; print('camoufox_ok')" 2>/dev/null || echo "camoufox_missing"`);
-  if (check.stdout?.includes('camoufox_ok')) { _browserReady = true; return true; }
+export async function loadCoreMemory(uid) {
+  try {
+    const db  = await getDb();
+    const doc = await db.doc(`users/${uid}/memory/core`).get();
+    if (doc.exists && doc.data()?.content) return doc.data().content;
+    const template = readSkill('memory.md');
+    if (template) await saveCoreMemory(uid, template);
+    return template || '';
+  } catch(e) {
+    log('error','memory','loadCoreMemory failed',{error:e.message});
+    return readSkill('memory.md') || '';
+  }
+}
 
-  log('info','browser','Installing camoufox...');
-  const install = await executeShell(`
-pip install camoufox[geoip] --break-system-packages -q 2>&1 | tail -3
-python3 -m camoufox fetch --browser firefox 2>&1 | tail -5
-echo "install_done"
-`);
-  _browserReady = install.stdout?.includes('install_done');
-  return _browserReady;
+export async function saveCoreMemory(uid, content) {
+  try {
+    const db = await getDb();
+    await db.doc(`users/${uid}/memory/core`).set({
+      content, updated_at: new Date().toISOString(),
+    });
+    log('ok','memory',`core saved (${content.length}ch)`);
+  } catch(e) { log('error','memory','saveCoreMemory failed',{error:e.message}); throw e; }
 }
 
 /**
- * engine = "camoufox" | "requests"
+ * الطبقة 2: EPISODIC — سجل الأحداث (append-only)
  */
-export async function executeBrowser(url, task = '', engine = 'camoufox') {
-  // requests fallback — للمواقع البسيطة (أسرع، بدون browser)
-  if (engine === 'requests') {
+export async function addEpisode(uid, episode) {
+  try {
+    const db = await getDb();
+    const { FieldValue } = await import('firebase-admin/firestore');
+    const entry = {
+      date:        new Date().toISOString(),
+      event:       episode.event       || '',
+      importance:  episode.importance  || 'medium',   // low|medium|high|critical
+      tags:        episode.tags        || [],
+      context:     episode.context     || '',
+    };
+    await db.doc(`users/${uid}/memory/episodic`).set(
+      { entries: FieldValue.arrayUnion(entry), updated_at: new Date().toISOString() },
+      { merge: true }
+    );
+    log('ok','memory',`episode added: ${entry.event.slice(0,60)}`);
+  } catch(e) { log('warn','memory','addEpisode failed',{error:e.message}); }
+}
+
+export async function loadEpisodic(uid, limit=20) {
+  try {
+    const db  = await getDb();
+    const doc = await db.doc(`users/${uid}/memory/episodic`).get();
+    if (!doc.exists) return [];
+    const entries = doc.data()?.entries || [];
+    // أحدث N حدث مرتبة تنازلياً
+    return entries.slice(-limit).reverse();
+  } catch(e) {
+    log('warn','memory','loadEpisodic failed',{error:e.message});
+    return [];
+  }
+}
+
+/**
+ * الطبقة 3: TASKS — مهام معلقة ومكتملة
+ */
+export async function loadTasks(uid) {
+  try {
+    const db  = await getDb();
+    const doc = await db.doc(`users/${uid}/memory/tasks`).get();
+    if (!doc.exists) return { pending: [], completed: [] };
+    return {
+      pending:   doc.data()?.pending   || [],
+      completed: doc.data()?.completed || [],
+    };
+  } catch(e) {
+    log('warn','memory','loadTasks failed',{error:e.message});
+    return { pending:[], completed:[] };
+  }
+}
+
+export async function saveTasks(uid, tasks) {
+  try {
+    const db = await getDb();
+    await db.doc(`users/${uid}/memory/tasks`).set({
+      pending:   tasks.pending   || [],
+      completed: tasks.completed || [],
+      updated_at: new Date().toISOString(),
+    });
+    log('ok','memory',`tasks saved — pending:${tasks.pending?.length} completed:${tasks.completed?.length}`);
+  } catch(e) { log('warn','memory','saveTasks failed',{error:e.message}); }
+}
+
+/**
+ * الطبقة 4: WORLD MODEL — معتقدات + أحداث العالم
+ */
+export async function loadWorldModel(uid) {
+  try {
+    const db  = await getDb();
+    const doc = await db.doc(`users/${uid}/memory/world`).get();
+    if (!doc.exists) return { beliefs:{}, current_events:[], updated_at:null };
+    return doc.data();
+  } catch(e) {
+    log('warn','memory','loadWorldModel failed',{error:e.message});
+    return { beliefs:{}, current_events:[], updated_at:null };
+  }
+}
+
+export async function saveWorldModel(uid, world) {
+  try {
+    const db = await getDb();
+    await db.doc(`users/${uid}/memory/world`).set({
+      ...world, updated_at: new Date().toISOString(),
+    });
+  } catch(e) { log('warn','memory','saveWorldModel failed',{error:e.message}); }
+}
+
+/**
+ * loadMemory — backward compat + يجمع كل الطبقات للـ system instruction
+ */
+export async function loadMemory(uid) {
+  return loadCoreMemory(uid);
+}
+export async function saveMemory(uid, content) {
+  return saveCoreMemory(uid, content);
+}
+
+// ================================================================
+// READ TOOL — تحميل ملف من skills/tools/
+// ================================================================
+export function readTool(filename) {
+  const safe = filename.replace(/\.\./g,'').replace(/\//g,'');
+  const fullPath = join(SKILLS_DIR, 'tools', safe.endsWith('.md') ? safe : safe+'.md');
+  try {
+    const content = readFileSync(fullPath, 'utf8');
+    log('ok','read_tool',`loaded: ${safe} (${content.length}ch)`);
+    return content;
+  } catch(e) {
+    log('warn','read_tool',`not found: ${fullPath}`);
+    return `❌ الملف ${safe} غير موجود في skills/tools/`;
+  }
+}
+
+
+// ================================================================
+// BROWSER EXECUTION — Camoufox + requests fallback
+// ================================================================
+let _browserReady = false;
+async function ensureBrowserTools() {
+  if (_browserReady) return true;
+  const check = await executeShell(`python3 -c "import camoufox; print('ok')" 2>/dev/null || echo "missing"`);
+  if (check.stdout?.includes('ok')) { _browserReady = true; return true; }
+  log('info','browser','Installing camoufox...');
+  await executeShell(`pip install camoufox[geoip] --break-system-packages -q 2>&1 | tail -3 && python3 -m camoufox fetch --browser firefox 2>&1 | tail -3`);
+  _browserReady = true;
+  return true;
+}
+
+export async function executeBrowser(url, task='', engine='camoufox') {
+  if (engine === 'requests') return executeRequestsFetch(url, task);
+  await ensureBrowserTools();
+  const result = await executeCamoufox(url, task);
+  if (!result.success) {
+    log('warn','browser',`Camoufox failed: ${result.error?.slice(0,60)} → fallback requests`);
     return executeRequestsFetch(url, task);
   }
-
-  // Camoufox — Firefox متخفي يتجاوز Cloudflare/bot detection
-  await ensureBrowserTools();
-  return executeCamoufox(url, task);
+  return result;
 }
 
 async function executeCamoufox(url, task) {
-  const urlEsc  = url.replace(/'/g, "\\'");
-  const taskEsc = task.replace(/'/g, "\\'");
-
+  const urlEsc  = url.replace(/'/g,"\\'");
+  const taskEsc = task.replace(/'/g,"\\'");
   const script = `
 import json, sys
-
 try:
     from camoufox.sync_api import Camoufox
 except ImportError:
-    print(json.dumps({"success": False, "error": "camoufox not available", "engine_used": "camoufox"}))
-    sys.exit(0)
+    print(json.dumps({"success":False,"error":"camoufox not installed","engine_used":"camoufox"})); sys.exit(0)
 
-def extract_article(page):
-    """استخراج محتوى المقال الرئيسي"""
-    selectors = ['article', 'main', '[role=main]',
-                 '.article-body', '.post-content',
-                 '.entry-content', '.content', '#content']
-    for sel in selectors:
+def block(route, req):
+    if req.resource_type in ('image','media','font'): route.abort()
+    else: route.continue_()
+
+try:
+    with Camoufox(headless=True) as browser:
+        page = browser.new_page()
+        page.route('**/*', block)
+        page.goto('${urlEsc}', wait_until='domcontentloaded', timeout=30000)
+        try: page.wait_for_load_state('networkidle', timeout=6000)
+        except: pass
+
+        article = ''
+        for sel in ['article','main','[role=main]','.article-body','.post-content','.entry-content']:
+            try:
+                el = page.query_selector(sel)
+                if el:
+                    t = el.inner_text().strip()
+                    if len(t) > 300: article = t[:7000]; break
+            except: pass
+        if not article:
+            try: article = page.inner_text('body').strip()[:5000]
+            except: pass
+
+        headings = []
         try:
-            el = page.query_selector(sel)
-            if el:
-                text = el.inner_text().strip()
-                if len(text) > 300:
-                    return text[:7000]
-        except Exception:
-            continue
-    try:
-        return page.inner_text('body').strip()[:5000]
-    except Exception:
-        return ''
+            headings = page.evaluate("() => [...document.querySelectorAll('h1,h2,h3')].map(h=>({tag:h.tagName,text:h.innerText.trim().substring(0,120)})).slice(0,15)")
+        except: pass
 
-def run():
-    try:
-        with Camoufox(headless=True) as browser:
-            page = browser.new_page()
+        links = []
+        try:
+            links = page.evaluate("() => [...document.querySelectorAll('a[href]')].filter(a=>a.innerText.trim()).map(a=>({text:a.innerText.trim().substring(0,60),href:a.href})).slice(0,20)")
+        except: pass
 
-            # تجاهل الموارد الثقيلة
-            def block_heavy(route, req):
-                if req.resource_type in ('image', 'media', 'font', 'stylesheet'):
-                    route.abort()
-                else:
-                    route.continue_()
-            page.route('**/*', block_heavy)
-
-            page.goto('${urlEsc}', wait_until='domcontentloaded', timeout=30000)
-            try:
-                page.wait_for_load_state('networkidle', timeout=6000)
-            except Exception:
-                pass
-
-            title = ''
-            try: title = page.title()
-            except Exception: pass
-
-            article_text = extract_article(page)
-
-            headings = []
-            try:
-                headings = page.evaluate(
-                    "() => [...document.querySelectorAll('h1,h2,h3')]"
-                    ".map(h => ({tag:h.tagName,text:h.innerText.trim().substring(0,120)}))"
-                    ".slice(0,15)"
-                )
-            except Exception: pass
-
-            links = []
-            try:
-                links = page.evaluate(
-                    "() => [...document.querySelectorAll('a[href]')]"
-                    ".filter(a => a.innerText.trim().length > 2)"
-                    ".map(a => ({text:a.innerText.trim().substring(0,60),href:a.href}))"
-                    ".slice(0,20)"
-                )
-            except Exception: pass
-
-            return {
-                "success": True,
-                "url": '${urlEsc}',
-                "task": '${taskEsc}',
-                "title": title,
-                "article_text": article_text,
-                "headings": headings,
-                "links": links,
-                "engine_used": "camoufox",
-                "textLength": len(article_text),
-            }
-    except Exception as e:
-        return {"success": False, "error": str(e), "engine_used": "camoufox"}
-
-result = run()
-print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps({"success":True,"url":"${urlEsc}","task":"${taskEsc}","article_text":article,"headings":headings,"links":links,"engine_used":"camoufox","textLength":len(article)}, ensure_ascii=False))
+except Exception as e:
+    print(json.dumps({"success":False,"error":str(e),"engine_used":"camoufox"}))
 `;
-
   const r = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
-  if (!r.success) {
-    log('warn','browser',`Camoufox shell failed: ${r.error?.slice(0,80)} — falling back to requests`);
-    return executeRequestsFetch(url, task);  // fallback تلقائي
-  }
-
+  if (!r.success) return {success:false,type:'browser',error:r.error,engine_used:'camoufox'};
   try {
     const parsed = JSON.parse(r.stdout.trim());
-    log('info','browser',`engine=${parsed.engine_used} textLen=${parsed.textLength} success=${parsed.success}`);
-    if (!parsed.success) {
-      log('warn','browser',`Camoufox failed: ${parsed.error} — falling back to requests`);
-      return executeRequestsFetch(url, task);
-    }
-    return { type:'browser', ...parsed };
-  } catch {
-    log('warn','browser','JSON parse failed — falling back to requests');
-    return executeRequestsFetch(url, task);
-  }
+    log('info','browser',`camoufox: textLen=${parsed.textLength} success=${parsed.success}`);
+    return {type:'browser',...parsed};
+  } catch { return {success:false,type:'browser',error:'JSON parse failed',engine_used:'camoufox'}; }
 }
 
 async function executeRequestsFetch(url, task) {
-  const urlEsc  = url.replace(/'/g, "\\'");
-  const taskEsc = task.replace(/'/g, "\\'");
-
+  const urlEsc  = url.replace(/'/g,"\\'");
   const script = `
-import json, sys, re
-
+import json, sys, re, urllib.request
 try:
-    import urllib.request
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "ar,en;q=0.9",
-        "Accept-Encoding": "identity",
-    }
+    headers = {"User-Agent":"Mozilla/5.0 (OFOQ/3.0)","Accept":"text/html","Accept-Language":"ar,en;q=0.9"}
     req = urllib.request.Request('${urlEsc}', headers=headers)
     with urllib.request.urlopen(req, timeout=20) as r:
-        raw = r.read().decode('utf-8', errors='ignore')
-
-    # إزالة scripts و styles
-    raw = re.sub(r'<script[^>]*>.*?</script>', ' ', raw, flags=re.DOTALL|re.IGNORECASE)
-    raw = re.sub(r'<style[^>]*>.*?</style>',  ' ', raw, flags=re.DOTALL|re.IGNORECASE)
-
-    # استخراج العنوان
-    title_m = re.search(r'<title[^>]*>(.*?)</title>', raw, re.IGNORECASE|re.DOTALL)
+        raw = r.read().decode('utf-8',errors='ignore')
+    raw = re.sub(r'<script[^>]*>.*?</script>',' ',raw,flags=re.DOTALL|re.I)
+    raw = re.sub(r'<style[^>]*>.*?</style>',' ',raw,flags=re.DOTALL|re.I)
+    title_m = re.search(r'<title[^>]*>(.*?)</title>',raw,re.I|re.DOTALL)
     title = title_m.group(1).strip() if title_m else ''
-
-    # إزالة باقي الـ tags
-    text = re.sub(r'<[^>]+>', ' ', raw)
-    text = re.sub(r'&[a-zA-Z]+;', ' ', text)
-    text = re.sub(r'\\s+', ' ', text).strip()[:6000]
-
-    # استخراج الروابط
-    links = []
-    for m in re.finditer(r'href=["\\'](https?://[^"\\'\\s]+)["\\'"]', raw):
-        links.append({"href": m.group(1)})
-    links = links[:15]
-
-    print(json.dumps({
-        "success": True,
-        "url": '${urlEsc}',
-        "task": '${taskEsc}',
-        "title": title,
-        "article_text": text,
-        "text": text,
-        "headings": [],
-        "links": links,
-        "engine_used": "requests",
-        "textLength": len(text),
-    }, ensure_ascii=False))
-
+    text = re.sub(r'<[^>]+>',' ',raw)
+    text = re.sub(r'&[a-zA-Z]+;',' ',text)
+    text = re.sub(r'\\s+',' ',text).strip()[:6000]
+    print(json.dumps({"success":True,"url":"${urlEsc}","title":title,"article_text":text,"text":text,"engine_used":"requests","textLength":len(text)},ensure_ascii=False))
 except Exception as e:
-    print(json.dumps({"success": False, "error": str(e), "engine_used": "requests"}))
+    print(json.dumps({"success":False,"error":str(e),"engine_used":"requests"}))
 `;
-
   const r = await executeShell(`python3 << 'PYEOF'\n${script}\nPYEOF`);
-  if (!r.success) {
-    return { success:false, type:'browser', error:r.error, engine_used:'requests' };
-  }
-
+  if (!r.success) return {success:false,type:'browser',error:r.error,engine_used:'requests'};
   try {
     const parsed = JSON.parse(r.stdout.trim());
-    log('info','browser',`requests engine — textLen=${parsed.textLength} success=${parsed.success}`);
-    return { type:'browser', ...parsed };
-  } catch {
-    return { success:false, type:'browser', error:'JSON parse failed', engine_used:'requests' };
-  }
+    log('info','browser',`requests: textLen=${parsed.textLength} success=${parsed.success}`);
+    return {type:'browser',...parsed};
+  } catch { return {success:false,type:'browser',error:'JSON parse failed',engine_used:'requests'}; }
 }
